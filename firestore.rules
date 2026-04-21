@@ -1,0 +1,110 @@
+rules_version='2'
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function role() {
+      return isSignedIn() && request.auth.token.role is string
+        ? request.auth.token.role
+        : null;
+    }
+
+    function isAdmin() {
+      return role() == 'admin';
+    }
+
+    function isStaffLike() {
+      return role() == 'staff' || role() == 'admin';
+    }
+
+    function isOwnAccount(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function accountEventLink(eventId) {
+      return get(/databases/$(database)/documents/accounts/$(request.auth.uid)/eventLinks/$(eventId));
+    }
+
+    function isLinkedUserForEvent(eventId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/accounts/$(request.auth.uid)/eventLinks/$(eventId));
+    }
+
+    function isLinkedUserForPerson(eventId, personId) {
+      return isLinkedUserForEvent(eventId)
+        && accountEventLink(eventId).data.personId == personId;
+    }
+
+    function validUserAccountCreate(uid) {
+      return request.resource.data.uid == uid
+        && request.resource.data.role == 'user'
+        && request.resource.data.status == 'active'
+        && request.resource.data.email == request.auth.token.email;
+    }
+
+    match /accounts/{uid} {
+      allow read: if isOwnAccount(uid) || isStaffLike();
+      allow create: if isOwnAccount(uid) && validUserAccountCreate(uid);
+      allow update, delete: if isAdmin();
+
+      match /eventLinks/{eventId} {
+        allow read: if isOwnAccount(uid) || isAdmin();
+        allow write: if isAdmin();
+      }
+    }
+
+    match /system/runtime {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /events/{eventId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+
+      match /products/{productId} {
+        allow read: if isSignedIn();
+        allow write: if isStaffLike();
+      }
+
+      match /modifierTemplates/{templateId} {
+        allow read: if isSignedIn();
+        allow write: if isStaffLike();
+      }
+
+      match /people/{personId} {
+        allow read: if isStaffLike() || isLinkedUserForPerson(eventId, personId);
+        allow write: if isStaffLike();
+      }
+
+      match /baskets/{personId} {
+        allow read, write: if isStaffLike();
+      }
+
+      match /orders/{orderId} {
+        allow read: if isStaffLike()
+          || (isLinkedUserForEvent(eventId)
+            && resource.data.personId == accountEventLink(eventId).data.personId);
+        allow write: if isStaffLike();
+      }
+
+      match /ledgerEntries/{entryId} {
+        allow read: if isStaffLike();
+        allow write: if isStaffLike();
+      }
+
+      match /auditLogs/{entryId} {
+        allow read: if isAdmin();
+        allow write: if isStaffLike();
+      }
+
+      match /qrAssignments/{qrId} {
+        allow read: if isAdmin();
+        allow write: if isAdmin();
+      }
+    }
+  }
+}
