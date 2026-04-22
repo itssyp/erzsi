@@ -27,23 +27,30 @@ function FoodOrderTracker({ status }) {
 
   return (
     <div className="order-status-track">
-      {FOOD_STATUS_STEPS.map((step, i) => {
-        const isDone = i < currentIndex
-        const isCurrent = i === currentIndex
-        return (
-          <div key={step} style={{ display: 'flex', alignItems: 'center', flex: 1 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
+      <div className="order-status-rail">
+        <div className="order-status-line-layer" aria-hidden="true">
+          {FOOD_STATUS_STEPS.slice(0, -1).map((step, i) => (
+            <div
+              key={`${step}-line`}
+              className={`order-status-line${i < currentIndex ? ' done' : ''}`}
+            />
+          ))}
+        </div>
+        <div className="order-status-steps">
+          {FOOD_STATUS_STEPS.map((step, i) => {
+            const isDone = i < currentIndex
+            const isCurrent = i === currentIndex
+            return (
+              <div key={step} className="order-status-step">
               <div className={`order-status-dot${isDone ? ' done' : isCurrent ? ' current' : ''}`} />
               <span className={`order-status-label${isDone || isCurrent ? ' done' : ''}`}>
                 {STATUS_LABELS[step]}
               </span>
-            </div>
-            {i < FOOD_STATUS_STEPS.length - 1 && (
-              <div className={`order-status-line${isDone ? ' done' : ''}`} />
-            )}
-          </div>
-        )
-      })}
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
@@ -70,8 +77,8 @@ export function UserDashboardPage() {
       id: 'overview',
       label: 'Áttekintés',
       component: (
-        <div className="two-column-grid">
-          <section className="panel">
+        <div className="two-column-grid user-dashboard-grid">
+          <section className="panel user-flat-section user-balance-section">
             <div className="balance-label">Jelenlegi egyenleg</div>
             <div className="balance-value">{formatHuf(person.balance || 0)}</div>
             <div style={{ height: '1px', background: 'var(--border)', margin: '16px 0' }} />
@@ -83,9 +90,11 @@ export function UserDashboardPage() {
             </ul>
           </section>
 
-          <QrCodeCard value={person.assignedQrLink || person.qrCodeId} label="Saját QR-kód" />
+          <div className="user-qr-slot">
+            <QrCodeCard value={person.assignedQrLink || person.qrCodeId} label="Saját QR-kód" />
+          </div>
 
-          <section className="panel">
+          <section className="panel user-flat-section">
             <h3 className="card-title">Fiók</h3>
             <ul className="detail-list">
               <li><strong>Megjelenített név</strong> <span>{account?.displayName || user?.displayName || '-'}</span></li>
@@ -101,10 +110,10 @@ export function UserDashboardPage() {
       id: 'active',
       label: 'Aktív rendelés',
       component: (
-        <section className="panel">
+        <section className="panel user-flat-section user-active-order-section">
           <h3 className="card-title">Aktív ételrendelés</h3>
           {activeFoodOrder ? (
-            <div>
+            <div className="user-active-order-content">
               <FoodOrderTracker status={activeFoodOrder.foodStatus || FOOD_ORDER_STATUSES.new} />
               <p className="helper-text" style={{ marginTop: '16px', marginBottom: '12px' }}>
                 Rendelés ideje: {formatOrderTimestamp(activeFoodOrder.createdAt)}
@@ -121,7 +130,7 @@ export function UserDashboardPage() {
               </ul>
             </div>
           ) : (
-            <p className="helper-text">Jelenleg nincs aktív ételrendelés.</p>
+            <p className="helper-text user-active-order-empty">Jelenleg nincs aktív ételrendelés.</p>
           )}
         </section>
       ),
@@ -130,45 +139,46 @@ export function UserDashboardPage() {
       id: 'history',
       label: 'Előzmények',
       component: (
-        <section className="panel">
+        <section className="panel user-flat-section">
           <h3 className="card-title">Korábbi rendelések</h3>
-          <div style={{ marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div className="user-history-list">
             {orders.map((order) => (
-              <article
-                key={order.id}
-                style={{
-                  padding: '14px 16px',
-                  border: '1px solid var(--border)',
-                  borderRadius: 'var(--radius-md)',
-                  background: 'var(--bg)',
-                }}
-              >
-                <div className="split-header" style={{ marginBottom: '10px' }}>
-                  <div>
-                    <div style={{ fontWeight: 800, fontSize: '1rem' }}>{formatHuf(order.totalAmount)}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '2px' }}>
-                      {formatOrderTimestamp(order.createdAt)}
-                    </div>
+              <article key={order.id} className="receipt-container user-history-receipt">
+                <div className="receipt-header user-history-receipt-header">
+                  <div style={{ fontWeight: 800, fontSize: '1rem' }}>{formatHuf(order.totalAmount)}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '2px' }}>
+                    {formatOrderTimestamp(order.createdAt)}
                   </div>
-                  <div className="pill-row">
-                    {order.hasFood ? (
-                      <span className="event-pill">{order.foodStatus || 'étel'}</span>
-                    ) : null}
-                    {order.refundedTotal > 0 ? (
-                      <span className="event-pill" style={{ background: 'var(--success-soft)', borderColor: '#86efac', color: 'var(--success)' }}>
-                        Visszatérítve: {formatHuf(order.refundedTotal)}
-                      </span>
-                    ) : null}
+                  {order.hasFood ? (
+                    <div className="user-history-meta">{order.foodStatus || 'étel'}</div>
+                  ) : null}
+                  {order.refundedTotal > 0 ? (
+                    <div className="user-history-refund">
+                      Visszatérítve: {formatHuf(order.refundedTotal)}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="receipt-body">
+                  {order.lines.map((line) => (
+                    <div key={line.lineId} className="receipt-line">
+                      <span className="receipt-item-name">{line.quantity} x {line.productName}</span>
+                      <span className="receipt-dots" />
+                      <span className="receipt-line-price">{formatHuf(line.lineTotal)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="receipt-footer">
+                  <div className="receipt-subtotal">
+                    <span>Tételek</span>
+                    <span className="receipt-dots" />
+                    <span>{order.lines.reduce((sum, line) => sum + line.quantity, 0)}</span>
+                  </div>
+                  <div className="receipt-total">
+                    <span>TOTAL</span>
+                    <span className="receipt-dots" />
+                    <span>{formatHuf(order.totalAmount)}</span>
                   </div>
                 </div>
-                <ul className="detail-list">
-                  {order.lines.map((line) => (
-                    <li key={line.lineId}>
-                      <span>{line.quantity} x {line.productName}</span>
-                      <span style={{ fontWeight: 700 }}>{formatHuf(line.lineTotal)}</span>
-                    </li>
-                  ))}
-                </ul>
               </article>
             ))}
             {orders.length === 0 ? (
@@ -181,15 +191,7 @@ export function UserDashboardPage() {
   ] : []
 
   return (
-    <>
-      <section className="page-heading">
-        <span className="eyebrow">Résztvevő</span>
-        <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>Saját tábori irányítópult</h2>
-        <p className="muted" style={{ marginTop: '4px' }}>
-          Egyenleg, QR-kód és rendelési előzmények.
-        </p>
-      </section>
-
+    <div className="user-dashboard-page">
       {error ? <div className="error-banner" style={{ marginBottom: '16px' }}>{error.message}</div> : null}
 
       {!hasLinkedPerson ? (
@@ -204,10 +206,10 @@ export function UserDashboardPage() {
           </ul>
         </StatusCard>
       ) : (
-        <div className="panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-          <TabShell tabs={tabs} />
+        <div className="panel user-dashboard-shell" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <TabShell tabs={tabs} className="user-tab-shell" />
         </div>
       )}
-    </>
+    </div>
   )
 }

@@ -5,6 +5,7 @@ export const LEDGER_ENTRY_TYPES = {
   manualAdjustment: 'manualAdjustment',
   sale: 'sale',
   refund: 'refund',
+  drsReturn: 'drsReturn',
 }
 
 export function buildLedgerEntryRecord({

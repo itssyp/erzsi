@@ -16,6 +16,28 @@ const initialState = {
   authError: null,
 }
 
+function shouldRefreshPrivilegedClaims(accountRole, claimsRole) {
+  const wantsPrivilegedRole = accountRole === ROLES.admin || accountRole === ROLES.staff
+
+  return wantsPrivilegedRole && accountRole !== claimsRole
+}
+
+async function resolveSessionRole(user, account, claims) {
+  let nextClaims = claims
+  let claimsRole = getRoleFromClaims(claims)
+  const accountRole = account?.role || null
+
+  if (shouldRefreshPrivilegedClaims(accountRole, claimsRole)) {
+    nextClaims = await getSessionClaims(user, true)
+    claimsRole = getRoleFromClaims(nextClaims)
+  }
+
+  return {
+    claims: nextClaims,
+    role: claimsRole || ROLES.user,
+  }
+}
+
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(initialState)
 
@@ -59,17 +81,34 @@ export function AuthProvider({ children }) {
 
         stopAccountSubscription = subscribeToAccount(
           nextUser.uid,
-          (account) => {
+          async (account) => {
             if (cancelled) return
 
-            setSession({
-              initializing: false,
-              user: nextUser,
-              account,
-              role: account?.role || claimsRole || ROLES.user,
-              claims,
-              authError: null,
-            })
+            try {
+              const resolvedSession = await resolveSessionRole(nextUser, account, claims)
+
+              if (cancelled) return
+
+              setSession({
+                initializing: false,
+                user: nextUser,
+                account,
+                role: resolvedSession.role,
+                claims: resolvedSession.claims,
+                authError: null,
+              })
+            } catch (error) {
+              if (cancelled) return
+
+              setSession({
+                initializing: false,
+                user: nextUser,
+                account,
+                role: claimsRole || ROLES.user,
+                claims,
+                authError: error,
+              })
+            }
           },
           (error) => {
             if (cancelled) return

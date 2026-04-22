@@ -33,6 +33,7 @@ export function AppShell() {
   const avatarInitial = (signedInLabel || 'F')[0].toUpperCase()
   const pageTitle = PAGE_TITLES[location.pathname] || ''
   const eventLabel = activeEvent?.name || activeEventId
+  const activeBasketSnapshot = activeBasket?.getSnapshot?.() || activeBasket
 
   useEffect(() => {
     setIsMenuOpen(false)
@@ -124,7 +125,7 @@ export function AppShell() {
   }
 
   async function handleFinalizeAndContinue() {
-    if (!activeBasket?.canFinalize) {
+    if (!activeBasketSnapshot?.canFinalize) {
       return
     }
 
@@ -284,15 +285,15 @@ export function AppShell() {
             <span className="eyebrow">Aktív rendelés</span>
             <h3 className="card-title">Még nyitva van egy kosár</h3>
             <p className="helper-text">
-              {activeBasket?.personDisplayName
-                ? `${activeBasket.personDisplayName} számára még aktív kosár van ezen az eszközön.`
+              {activeBasketSnapshot?.personDisplayName
+                ? `${activeBasketSnapshot.personDisplayName} számára még aktív kosár van ezen az eszközön.`
                 : 'Ezen az eszközön még van egy aktív kosár.'}
             </p>
             <p className="helper-text">
               Az oldal elhagyása előtt töröld vagy zárd le a kosarat.
             </p>
             <div className="detail-list">
-              <div className="event-pill">Tételek: {activeBasket?.itemCount || 0}</div>
+              <div className="event-pill">Tételek: {activeBasketSnapshot?.itemCount || 0}</div>
             </div>
             <div className="button-row">
               <button type="button" className="secondary-button" onClick={handleStayOnPage} disabled={actionPending}>
@@ -305,7 +306,7 @@ export function AppShell() {
                 type="button"
                 className="primary-button"
                 onClick={handleFinalizeAndContinue}
-                disabled={actionPending || !activeBasket?.canFinalize}
+                disabled={actionPending || !activeBasketSnapshot?.canFinalize}
               >
                 {actionPending ? 'Folyamatban...' : 'Rendelés lezárása'}
               </button>

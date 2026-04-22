@@ -12,12 +12,47 @@ service cloud.firestore {
         : null;
     }
 
+    function accountPath() {
+      return /databases/$(database)/documents/accounts/$(request.auth.uid);
+    }
+
+    function hasAccount() {
+      return isSignedIn() && exists(accountPath());
+    }
+
+    function accountData() {
+      return hasAccount()
+        ? get(accountPath()).data
+        : null;
+    }
+
+    function accountRole() {
+      return hasAccount()
+        && accountData().role is string
+        ? accountData().role
+        : null;
+    }
+
+    function accountStatus() {
+      return hasAccount()
+        && accountData().status is string
+        ? accountData().status
+        : 'active';
+    }
+
+    function effectiveRole() {
+      return role() != null
+        ? role()
+        : accountRole();
+    }
+
     function isAdmin() {
-      return role() == 'admin';
+      return effectiveRole() == 'admin' && accountStatus() != 'disabled';
     }
 
     function isStaffLike() {
-      return role() == 'staff' || role() == 'admin';
+      return (effectiveRole() == 'staff' || effectiveRole() == 'admin')
+        && accountStatus() != 'disabled';
     }
 
     function isOwnAccount(uid) {
@@ -104,6 +139,10 @@ service cloud.firestore {
       match /qrAssignments/{qrId} {
         allow read: if isAdmin();
         allow write: if isAdmin();
+      }
+
+      match /drsReturns/{returnId} {
+        allow read, write: if isStaffLike();
       }
     }
   }

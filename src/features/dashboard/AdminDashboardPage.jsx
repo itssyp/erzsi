@@ -3,6 +3,7 @@ import { AuditLogPanel } from '../admin/AuditLogPanel'
 import { EventArchivePanel } from '../admin/EventArchivePanel'
 import { EventManagementPanel } from '../admin/EventManagementPanel'
 import { PeopleManagementPanel } from '../admin/PeopleManagementPanel'
+import { DrsSummaryPanel } from '../drs/DrsSummaryPanel'
 import { StatusCard } from '../../components/StatusCard'
 import { useAuth } from '../auth/useAuth'
 import { useActiveEvent } from '../events/useActiveEvent'
@@ -74,6 +75,15 @@ export function AdminDashboardPage() {
       id: 'accounts',
       label: 'Fiókok',
       component: <AccountManagementPanel actorUid={user?.uid} />,
+    },
+    {
+      id: 'drs',
+      label: 'DRS',
+      component: activeEventId ? (
+        <DrsSummaryPanel eventId={activeEventId} />
+      ) : (
+        <StatusCard title="Nincs aktív esemény" tone="warning" body="Először válassz vagy hozz létre egy eseményt." />
+      ),
     },
     {
       id: 'audit',

@@ -18,6 +18,7 @@ export const AUDIT_TYPES = {
   orderFinalization: 'orderFinalization',
   refund: 'refund',
   kitchenStatusChange: 'kitchenStatusChange',
+  drsReturn: 'drsReturn',
 }
 
 export function buildAuditLogRecord({

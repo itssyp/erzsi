@@ -12,6 +12,7 @@ const emptyProductState = {
   isActive: true,
   isTemporarilyUnavailable: false,
   modifierTemplateId: '',
+  isDRS: false,
 }
 
 const PRODUCT_AVAILABILITY = {
@@ -246,6 +247,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
       isActive: product.isActive,
       isTemporarilyUnavailable: product.isTemporarilyUnavailable,
       modifierTemplateId: product.modifierTemplateId || '',
+      isDRS: product.isDRS || false,
     })
     setStatusMessage('')
   }
@@ -403,7 +405,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       <span>
                         <strong>{product.name}</strong>
                         <small>
-                          {product.category} | {formatHuf(product.price)}
+                          {product.category} | {formatHuf(product.price)}{product.isDRS ? ' | DRS' : ''}
                         </small>
                       </span>
                       <span className="catalog-record-meta">
@@ -516,6 +518,21 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                     {sortedTemplates.length
                       ? 'Válassz sablont, ha a staff módosíthat összetevőket vagy fizetős extrákat.'
                       : 'Még nincs sablon. Először hozz létre egyet a sablonpanelen.'}
+                  </span>
+                </div>
+                <div className="field">
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={productState.isDRS}
+                      onChange={(event) =>
+                        setProductState((current) => ({ ...current, isDRS: event.target.checked }))
+                      }
+                    />
+                    <span style={{ fontWeight: 500 }}>Betétdíjas termék (DRS, 50 Ft/palack)</span>
+                  </label>
+                  <span className="helper-text">
+                    Bejelölve a termék mellé automatikusan 50 Ft betétdíj-sor kerül a kasszában.
                   </span>
                 </div>
                 <div className="field">

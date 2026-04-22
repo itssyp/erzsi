@@ -1,4 +1,4 @@
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { StatusCard } from '../../components/StatusCard'
 import { formatHuf } from '../../lib/money'
 import { getStaffSessionId } from '../../lib/session'
@@ -16,7 +16,9 @@ import {
   refreshBasketLock,
   saveBasketItems,
 } from './posService'
-import { buildBasketLine, summarizeBasketItems } from './basketModels'
+import { buildBasketLine, buildBasketLineMergeKey, buildDrsLine, summarizeBasketItems } from './basketModels'
+import { createDrsReturn } from '../drs/drsService'
+import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { useKitchenWorkload } from '../kitchen/useKitchenWorkload'
 import { useActiveEvent } from '../events/useActiveEvent'
 
@@ -24,12 +26,39 @@ const allCategories = ['all', ...PRODUCT_CATEGORIES]
 const BASKET_ABANDON_CANCEL_MS = 60 * 1000
 const BASKET_HEARTBEAT_MS = 15 * 1000
 const BASKET_SYNC_DEBOUNCE_MS = 220
+const EMPTY_BASKET_SUMMARY = Object.freeze({
+  items: [],
+  itemCount: 0,
+  totalAmount: 0,
+})
 
 function CameraIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="camera-icon">
       <path
         d="M8 6h2l1-2h2l1 2h2a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h2zm4 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0-2.2a1.8 1.8 0 1 1 0-3.6 1.8 1.8 0 0 1 0 3.6z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="action-icon">
+      <path
+        d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 7h2v8h-2v-8zm4 0h2v8h-2v-8zM7 10h2v8H7v-8zm1 10h8a2 2 0 0 0 2-2V8H6v10a2 2 0 0 0 2 2z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
+
+function CheckIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="action-icon">
+      <path
+        d="M9.2 16.6 4.9 12.3l1.4-1.4 2.9 2.9 8.5-8.5 1.4 1.4-9.9 9.9z"
         fill="currentColor"
       />
     </svg>
@@ -80,7 +109,7 @@ const ProductTile = memo(({ product, onClick, disabled }) => (
       {product.category}
     </span>
     {product.isTemporarilyUnavailable ? (
-      <span className="product-tile-status">Átmenetileg nem elérhető</span>
+      <span className="product-tile-status">TNA</span>
     ) : null}
     <span style={{ fontWeight: 800, color: 'var(--primary)', fontSize: '0.95rem', marginTop: 'auto' }}>
       {formatHuf(product.price)}
@@ -97,9 +126,9 @@ export function StaffPosPanel({ eventId }) {
   const [products, setProducts] = useState([])
   const [modifierTemplates, setModifierTemplates] = useState([])
   const [selectedPerson, setSelectedPerson] = useState(null)
+  const [switchTargetPerson, setSwitchTargetPerson] = useState(null)
   const [basketItems, setBasketItems] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
-  const [qrInput, setQrInput] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [customizingProduct, setCustomizingProduct] = useState(null)
   const [customizationState, setCustomizationState] = useState(null)
@@ -107,6 +136,9 @@ export function StaffPosPanel({ eventId }) {
   const [errorMessage, setErrorMessage] = useState('')
   const [basketSyncing, setBasketSyncing] = useState(false)
   const [pending, setPending] = useState(false)
+  const [drsReturnQty, setDrsReturnQty] = useState('')
+  const [drsReturnPending, setDrsReturnPending] = useState(false)
+  const [drsReturnMessage, setDrsReturnMessage] = useState('')
   const performSwitchToPersonRef = useRef(async () => {})
   const cancelBasketHandlerRef = useRef(async () => {})
   const finalizeBasketHandlerRef = useRef(async () => {})
@@ -114,11 +146,19 @@ export function StaffPosPanel({ eventId }) {
   const abandonmentTimeoutRef = useRef(null)
   const shouldCancelAfterReturnRef = useRef(false)
   const basketSyncTimerRef = useRef(null)
+  const basketRenderFrameRef = useRef(null)
   const basketDirtyRef = useRef(false)
   const latestBasketItemsRef = useRef([])
   const committedBasketItemsRef = useRef([])
   const activeBasketSaveRef = useRef(null)
   const selectedPersonRef = useRef(null)
+  const flushBasketDraftRef = useRef(async () => {})
+  const activeBasketSnapshotRef = useRef({
+    personDisplayName: '',
+    itemCount: 0,
+    canFinalize: false,
+    isSyncing: false,
+  })
 
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const sessionId = useMemo(() => getStaffSessionId(), [])
@@ -138,15 +178,18 @@ export function StaffPosPanel({ eventId }) {
     return subscribeToModifierTemplates(eventId, setModifierTemplates, (error) => setErrorMessage(error.message))
   }, [eventId])
 
+  const displayedPerson = switchTargetPerson || selectedPerson
+  const isSwitchingPerson = Boolean(switchTargetPerson)
+
   const filteredPeople = useMemo(() => {
     const normalizedQuery = deferredSearchQuery.trim().toLowerCase()
     if (!normalizedQuery) return []
     return people.filter((person) => {
-      if (selectedPerson?.id === person.id) return false
+      if (displayedPerson?.id === person.id) return false
       const haystack = `${person.displayName} ${person.internalId} ${person.team || ''}`.toLowerCase()
       return haystack.includes(normalizedQuery)
     }).slice(0, 20)
-  }, [deferredSearchQuery, people, selectedPerson])
+  }, [deferredSearchQuery, displayedPerson, people])
 
   const availableProducts = useMemo(() => {
     return products.filter((product) => {
@@ -163,9 +206,15 @@ export function StaffPosPanel({ eventId }) {
 
   const basketSummary = useMemo(() => summarizeBasketItems(basketItems), [basketItems])
   const shouldShowSearchResults = searchQuery.trim().length >= 2
+  const displayedBasketSummary = isSwitchingPerson ? EMPTY_BASKET_SUMMARY : basketSummary
 
-  latestBasketItemsRef.current = basketItems
   selectedPersonRef.current = selectedPerson
+  activeBasketSnapshotRef.current = {
+    personDisplayName: selectedPerson?.displayName || '',
+    itemCount: basketSummary.itemCount,
+    canFinalize: basketSummary.itemCount > 0,
+    isSyncing: basketSyncing,
+  }
 
   const { videoRef, scannerSupported } = useQrScanner({
     active: cameraOpen,
@@ -176,13 +225,11 @@ export function StaffPosPanel({ eventId }) {
         return
       }
 
-      setQrInput(normalizedQr)
       setCameraOpen(false)
 
       await runAction(async () => {
         const person = await findPersonByQr(eventId, normalizedQr)
         await performSwitchToPersonRef.current(person)
-        setQrInput('')
       })
     },
     onError: (error) => {
@@ -203,15 +250,42 @@ export function StaffPosPanel({ eventId }) {
     }
   }
 
-  function clearBasketSyncTimer() {
+  const clearBasketSyncTimer = useCallback(() => {
     if (basketSyncTimerRef.current) {
       window.clearTimeout(basketSyncTimerRef.current)
       basketSyncTimerRef.current = null
     }
-  }
+  }, [])
+
+  const clearBasketRenderFrame = useCallback(() => {
+    if (basketRenderFrameRef.current) {
+      window.cancelAnimationFrame(basketRenderFrameRef.current)
+      basketRenderFrameRef.current = null
+    }
+  }, [])
+
+  const scheduleBasketRender = useCallback(() => {
+    if (typeof window === 'undefined') {
+      setBasketItems(latestBasketItemsRef.current)
+      return
+    }
+
+    if (basketRenderFrameRef.current) {
+      return
+    }
+
+    basketRenderFrameRef.current = window.requestAnimationFrame(() => {
+      basketRenderFrameRef.current = null
+      const nextItems = latestBasketItemsRef.current
+      startTransition(() => {
+        setBasketItems(nextItems)
+      })
+    })
+  }, [])
 
   function resetBasketDraft(items = []) {
     clearBasketSyncTimer()
+    clearBasketRenderFrame()
     basketDirtyRef.current = false
     latestBasketItemsRef.current = items
     committedBasketItemsRef.current = items
@@ -266,7 +340,7 @@ export function StaffPosPanel({ eventId }) {
 
       if (selectedPersonRef.current?.id === person.id && latestBasketItemsRef.current !== itemsToPersist) {
         basketDirtyRef.current = true
-        await flushBasketDraft()
+        scheduleBasketSync()
       }
     } catch (error) {
       if (selectedPersonRef.current?.id === person.id) {
@@ -288,57 +362,60 @@ export function StaffPosPanel({ eventId }) {
     }
   }
 
-  function scheduleBasketSync() {
+  flushBasketDraftRef.current = flushBasketDraft
+
+  const scheduleBasketSync = useCallback(() => {
     clearBasketSyncTimer()
 
     basketSyncTimerRef.current = window.setTimeout(() => {
-      flushBasketDraft().catch(() => {})
+      flushBasketDraftRef.current().catch(() => {})
     }, BASKET_SYNC_DEBOUNCE_MS)
-  }
+  }, [clearBasketSyncTimer])
 
   const applyOptimisticBasketItems = useCallback((nextItems) => {
     basketDirtyRef.current = true
     latestBasketItemsRef.current = nextItems
-    setBasketItems(nextItems)
+    scheduleBasketRender()
     setBasketSyncing(true)
     scheduleBasketSync()
-  }, [])
+  }, [scheduleBasketRender, scheduleBasketSync])
 
   async function performSwitchToPerson(nextPerson) {
-    if (selectedPerson) {
-      if (basketSummary.itemCount > 0) {
+    const previousPerson = selectedPersonRef.current
+    const currentItemCount = latestBasketItemsRef.current.reduce((sum, item) => sum + item.quantity, 0)
+
+    setSwitchTargetPerson(nextPerson)
+    setSearchQuery('')
+
+    if (previousPerson) {
+      if (currentItemCount > 0) {
         await flushBasketDraft()
-        await finalizeBasket({ eventId, personId: selectedPerson.id, staffUid: user.uid, sessionId, staffName })
+        await finalizeBasket({ eventId, personId: previousPerson.id, staffUid: user.uid, sessionId, staffName })
       } else {
         clearBasketSyncTimer()
         if (activeBasketSaveRef.current) {
           await activeBasketSaveRef.current.catch(() => {})
         }
-        await cancelBasket({ eventId, personId: selectedPerson.id, staffUid: user.uid, sessionId })
+        await cancelBasket({ eventId, personId: previousPerson.id, staffUid: user.uid, sessionId })
       }
+
+      clearSelectedBasketState()
     }
 
-    const lockedBasket = await acquireBasketLock({ eventId, person: nextPerson, staffUid: user.uid, sessionId, staffName })
-    loadSelectedBasket(nextPerson, lockedBasket.items || [])
-    setSearchQuery('')
+    try {
+      const lockedBasket = await acquireBasketLock({ eventId, person: nextPerson, staffUid: user.uid, sessionId, staffName })
+      loadSelectedBasket(nextPerson, lockedBasket.items || [])
+    } finally {
+      setSwitchTargetPerson(null)
+    }
   }
 
   performSwitchToPersonRef.current = performSwitchToPerson
 
   async function switchToPerson(nextPerson) {
-    if (selectedPerson?.id === nextPerson.id) return
+    if (displayedPerson?.id === nextPerson.id) return
+    setSearchQuery('')
     await runAction(() => performSwitchToPerson(nextPerson))
-  }
-
-  async function handleQrLookup(event) {
-    event.preventDefault()
-    const normalizedQr = qrInput.trim()
-    if (!normalizedQr) return
-    await runAction(async () => {
-      const person = await findPersonByQr(eventId, normalizedQr)
-      await performSwitchToPersonRef.current(person)
-      setQrInput('')
-    })
   }
 
   async function handleFinalizeCurrentBasket() {
@@ -387,23 +464,26 @@ export function StaffPosPanel({ eventId }) {
     }
 
     const currentItems = latestBasketItemsRef.current
-    const existingIndex = currentItems.findIndex((item) => {
-      if (item.productId !== product.id) return false
-      if (!item.customization && !customization) return true
-      if (!item.customization || !customization) return false
-      if (item.customization === customization) return true
-      return JSON.stringify(item.customization) === JSON.stringify(customization)
-    })
+    const mergeKey = buildBasketLineMergeKey(product.id, customization)
+    const existingIndex = currentItems.findIndex(
+      (item) => item.lineType !== 'drs'
+        && (item.mergeKey || buildBasketLineMergeKey(item.productId, item.customization)) === mergeKey,
+    )
 
     if (existingIndex >= 0) {
-      const nextItems = [...currentItems]
-      nextItems[existingIndex] = {
-        ...nextItems[existingIndex],
-        quantity: nextItems[existingIndex].quantity + 1,
-      }
+      const parentLine = currentItems[existingIndex]
+      const nextItems = currentItems.map((item) => {
+        if (item.lineId === parentLine.lineId) return { ...item, quantity: item.quantity + 1 }
+        if (item.lineType === 'drs' && item.parentLineId === parentLine.lineId) return { ...item, quantity: item.quantity + 1 }
+        return item
+      })
       applyOptimisticBasketItems(nextItems)
     } else {
-      const nextItems = [...currentItems, buildBasketLine({ product, customization })]
+      const newLine = buildBasketLine({ product, customization })
+      const nextItems = [...currentItems, newLine]
+      if (product.isDRS) {
+        nextItems.push(buildDrsLine({ parentLineId: newLine.lineId, productName: product.name }))
+      }
       applyOptimisticBasketItems(nextItems)
     }
   }, [applyOptimisticBasketItems])
@@ -428,11 +508,51 @@ export function StaffPosPanel({ eventId }) {
   }
 
   function updateBasketLine(lineId, updater) {
-    if (!selectedPerson) return
-    const nextItems = basketItems
-      .map((item) => (item.lineId === lineId ? updater(item) : item))
+    if (!selectedPersonRef.current) return
+    const nextItems = latestBasketItemsRef.current
+      .map((item) => {
+        if (item.lineId !== lineId) {
+          return item
+        }
+        if (item.lineType === 'drs') {
+          return item
+        }
+        return updater(item)
+      })
+      .map((item, _, allItems) => {
+        if (item.lineType === 'drs') {
+          const parentLine = allItems.find((candidate) => candidate.lineId === item.parentLineId)
+          if (!parentLine || parentLine.quantity <= 0) {
+            return { ...item, quantity: 0 }
+          }
+          return { ...item, quantity: parentLine.quantity }
+        }
+        return item
+      })
       .filter((item) => item.quantity > 0)
     applyOptimisticBasketItems(nextItems)
+  }
+
+  async function handleDrsReturn() {
+    const qty = Number.parseInt(drsReturnQty, 10)
+    if (!selectedPerson || !Number.isInteger(qty) || qty < 1) return
+    setDrsReturnPending(true)
+    setDrsReturnMessage('')
+    try {
+      const result = await createDrsReturn({
+        eventId,
+        personId: selectedPerson.id,
+        quantity: qty,
+        actorUid: user.uid,
+        actorName: staffName,
+      })
+      setDrsReturnQty('')
+      setDrsReturnMessage(`Visszaváltva: ${formatHuf(result.totalCreditAmount)} jóváírva.`)
+    } catch (error) {
+      setDrsReturnMessage(error.message)
+    } finally {
+      setDrsReturnPending(false)
+    }
   }
 
   function closeCustomization() {
@@ -443,8 +563,9 @@ export function StaffPosPanel({ eventId }) {
   useEffect(() => {
     return () => {
       clearBasketSyncTimer()
+      clearBasketRenderFrame()
     }
-  }, [])
+  }, [clearBasketRenderFrame, clearBasketSyncTimer])
 
   useEffect(() => {
     if (!selectedPerson) {
@@ -454,10 +575,7 @@ export function StaffPosPanel({ eventId }) {
 
     registerActiveBasket({
       personId: selectedPerson.id,
-      personDisplayName: selectedPerson.displayName,
-      itemCount: basketSummary.itemCount,
-      canFinalize: basketSummary.itemCount > 0,
-      isSyncing: basketSyncing,
+      getSnapshot: () => activeBasketSnapshotRef.current,
       cancelBasket: () => cancelBasketHandlerRef.current(),
       finalizeBasket: () => finalizeBasketHandlerRef.current(),
     })
@@ -466,8 +584,6 @@ export function StaffPosPanel({ eventId }) {
       clearActiveBasket()
     }
   }, [
-    basketSummary.itemCount,
-    basketSyncing,
     clearActiveBasket,
     registerActiveBasket,
     selectedPerson,
@@ -580,7 +696,7 @@ export function StaffPosPanel({ eventId }) {
       window.removeEventListener('online', handleOnline)
       window.removeEventListener('pagehide', handlePageHide)
     }
-  }, [eventId, selectedPerson, sessionId, user.uid])
+  }, [clearActiveBasket, eventId, selectedPerson, sessionId, user.uid])
 
   return (
     <div className="pos-screen-layout">
@@ -594,7 +710,7 @@ export function StaffPosPanel({ eventId }) {
               id="personSearch"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Keresés név vagy azonosító alapján..."
+              placeholder="Keresés név vagy 5 számjegyű kód alapján..."
               autoComplete="off"
             />
             <button
@@ -617,25 +733,13 @@ export function StaffPosPanel({ eventId }) {
             </div>
           )}
 
-          <form className="inline-form" onSubmit={handleQrLookup}>
-            <input
-              id="qrLookup"
-              value={qrInput}
-              onChange={(event) => setQrInput(event.target.value)}
-              placeholder="5 számjegyű kód vagy QR-link"
-            />
-            <button type="submit" className="secondary-button" style={{ minWidth: '72px' }}>
-              Keresés
-            </button>
-          </form>
-
           {shouldShowSearchResults && (
             <div className="record-list compact pos-search-results panel">
               {filteredPeople.map((person) => (
                 <button
                   key={person.id}
                   type="button"
-                  className={`record-row${selectedPerson?.id === person.id ? ' selected' : ''}`}
+                  className={`record-row${displayedPerson?.id === person.id ? ' selected' : ''}`}
                   onClick={() => switchToPerson(person)}
                   disabled={pending}
                 >
@@ -656,15 +760,20 @@ export function StaffPosPanel({ eventId }) {
         {/* Receipt */}
         <div className="receipt-container">
           <div className="receipt-header">
-            {selectedPerson ? (
+            {displayedPerson ? (
               <>
-                <div style={{ fontWeight: 800, fontSize: '1rem' }}>{selectedPerson.displayName}</div>
+                <div style={{ fontWeight: 800, fontSize: '1rem' }}>{displayedPerson.displayName}</div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '2px' }}>
-                  #{selectedPerson.internalId}
+                  #{displayedPerson.internalId}
                 </div>
                 <div style={{ borderTop: '1px dashed var(--border)', marginTop: '8px', paddingTop: '8px', fontSize: '0.85rem' }}>
-                  Egyenleg: {formatHuf(selectedPerson.balance || 0)}
+                  Egyenleg: {formatHuf(displayedPerson.balance || 0)}
                 </div>
+                {isSwitchingPerson ? (
+                  <p className="helper-text" style={{ marginTop: '8px' }}>
+                    Vendég betöltése...
+                  </p>
+                ) : null}
               </>
             ) : (
               <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>Nincs kiválasztott vendég</p>
@@ -672,33 +781,43 @@ export function StaffPosPanel({ eventId }) {
           </div>
 
           <div className="receipt-body">
-            {basketSummary.items.map((item) => (
-              <div key={item.lineId} className="receipt-line">
-                <span className="receipt-item-name">{item.productName}</span>
-                <span className="receipt-dots" />
-                <span className="receipt-qty-price">{item.quantity}x</span>
-                <span className="receipt-line-price">{formatHuf(item.lineTotal)}</span>
-                <div className="receipt-controls">
-                  <button
-                    type="button"
-                    className="receipt-btn"
-                    onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity - 1 }))}
-                    aria-label="Remove one"
+            {displayedBasketSummary.items.map((item) => {
+              const isDrsLine = item.lineType === 'drs'
+              return (
+                <div key={item.lineId} className={`receipt-line${isDrsLine ? ' receipt-line-drs' : ''}`}>
+                  <span
+                    className="receipt-item-name"
+                    style={isDrsLine ? { color: 'var(--muted)', fontSize: '0.8em', paddingLeft: '10px' } : {}}
                   >
-                    -
-                  </button>
-                  <button
-                    type="button"
-                    className="receipt-btn"
-                    onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity + 1 }))}
-                    aria-label="Add one"
-                  >
-                    +
-                  </button>
+                    {item.productName}
+                  </span>
+                  <span className="receipt-dots" />
+                  <span className="receipt-qty-price">{item.quantity}x</span>
+                  <span className="receipt-line-price">{formatHuf(item.lineTotal)}</span>
+                  {!isDrsLine ? (
+                    <div className="receipt-controls">
+                      <button
+                        type="button"
+                        className="receipt-btn"
+                        onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity - 1 }))}
+                        aria-label="Remove one"
+                      >
+                        -
+                      </button>
+                      <button
+                        type="button"
+                        className="receipt-btn"
+                        onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity + 1 }))}
+                        aria-label="Add one"
+                      >
+                        +
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
-              </div>
-            ))}
-            {basketItems.length === 0 && (
+              )
+            })}
+            {displayedBasketSummary.items.length === 0 && (
               <p style={{ textAlign: 'center', color: 'var(--muted)', fontSize: '0.85rem', padding: '20px 0' }}>
                 - Üres kosár -
               </p>
@@ -711,28 +830,33 @@ export function StaffPosPanel({ eventId }) {
                 Kosár szinkronizálása...
               </p>
             ) : null}
+            {isSwitchingPerson ? (
+              <p className="helper-text" style={{ marginBottom: '10px' }}>
+                Vendég kiválasztása folyamatban...
+              </p>
+            ) : null}
             <div className="receipt-subtotal">
               <span>Tételek</span>
               <span className="receipt-dots" />
-              <span>{basketSummary.itemCount}</span>
+              <span>{displayedBasketSummary.itemCount}</span>
             </div>
-            {selectedPerson && basketSummary.totalAmount > 0 && (
+            {displayedPerson && displayedBasketSummary.totalAmount > 0 && (
               <div className="receipt-subtotal">
                 <span>Maradék</span>
                 <span className="receipt-dots" />
-                <span>{formatHuf((selectedPerson.balance || 0) - basketSummary.totalAmount)}</span>
+                <span>{formatHuf((displayedPerson.balance || 0) - displayedBasketSummary.totalAmount)}</span>
               </div>
             )}
             <div className="receipt-total">
               <span>TOTAL</span>
               <span className="receipt-dots" />
-              <span>{formatHuf(basketSummary.totalAmount)}</span>
+              <span>{formatHuf(displayedBasketSummary.totalAmount)}</span>
             </div>
 
-            <div className="receipt-action-row">
+            <div className="receipt-action-row pos-cart-action-row">
               <button
                 type="button"
-                className="secondary-button"
+                className="secondary-button pos-cart-delete-btn"
                 onClick={handleCancelCurrentBasket}
                 disabled={pending || !selectedPerson}
               >
@@ -740,15 +864,45 @@ export function StaffPosPanel({ eventId }) {
               </button>
               <button
                 type="button"
-                className="primary-button"
+                className="primary-button pos-cart-finalize-btn"
                 onClick={handleFinalizeCurrentBasket}
-                disabled={pending || basketSummary.itemCount === 0}
+                disabled={pending || displayedBasketSummary.itemCount === 0}
               >
                 {pending ? 'Folyamatban...' : 'Lezárás'}
               </button>
             </div>
           </div>
         </div>
+
+        {selectedPerson ? (
+          <div className="panel" style={{ marginTop: '8px', padding: '12px 14px' }}>
+            <h5 style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: '8px' }}>
+              Betétdíj-visszaváltás ({DRS_DEPOSIT_AMOUNT} Ft/palack)
+            </h5>
+            <div className="inline-form">
+              <input
+                type="number"
+                min="1"
+                value={drsReturnQty}
+                onChange={(event) => setDrsReturnQty(event.target.value)}
+                placeholder="Palackok száma"
+                style={{ width: '140px' }}
+                disabled={drsReturnPending}
+              />
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={handleDrsReturn}
+                disabled={drsReturnPending || !drsReturnQty || Number.parseInt(drsReturnQty, 10) < 1}
+              >
+                {drsReturnPending ? '...' : 'Visszaváltás'}
+              </button>
+            </div>
+            {drsReturnMessage ? (
+              <p className="helper-text" style={{ marginTop: '6px' }}>{drsReturnMessage}</p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/* RIGHT COLUMN: Product catalog */}
@@ -782,7 +936,7 @@ export function StaffPosPanel({ eventId }) {
           </div>
         </div>
 
-        {!selectedPerson && (
+        {!displayedPerson && (
           <p className="helper-text" style={{ textAlign: 'center', paddingTop: '8px' }}>
             Rendelés indításához olvass be vagy keress rá egy vendégre.
           </p>
@@ -790,7 +944,7 @@ export function StaffPosPanel({ eventId }) {
 
         <div
           className="product-grid"
-          style={{ opacity: !selectedPerson ? 0.45 : 1, pointerEvents: !selectedPerson ? 'none' : 'auto' }}
+          style={{ opacity: !displayedPerson ? 0.45 : 1, pointerEvents: !displayedPerson ? 'none' : 'auto' }}
         >
           {availableProducts.map((product) => (
             <ProductTile

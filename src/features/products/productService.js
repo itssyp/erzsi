@@ -38,6 +38,7 @@ export async function saveProduct({
   isActive,
   isTemporarilyUnavailable,
   modifierTemplateId,
+  isDRS = false,
 }) {
   const parsedPrice = parseHufInteger(price)
 
@@ -57,6 +58,7 @@ export async function saveProduct({
     isActive,
     isTemporarilyUnavailable,
     modifierTemplateId,
+    isDRS,
     actorUid,
   }
 
@@ -79,6 +81,7 @@ export async function saveProduct({
       isActive,
       isTemporarilyUnavailable,
       modifierTemplateId: modifierTemplateId || null,
+      isDRS,
     },
   })
 

@@ -16,6 +16,7 @@ export function buildProductRecord({
   isActive,
   isTemporarilyUnavailable,
   modifierTemplateId,
+  isDRS,
   actorUid,
 }) {
   return {
@@ -26,6 +27,7 @@ export function buildProductRecord({
     isActive,
     isTemporarilyUnavailable,
     modifierTemplateId: modifierTemplateId || null,
+    isDRS: isDRS || false,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     updatedBy: actorUid,
@@ -39,6 +41,7 @@ export function buildProductPatch({
   isActive,
   isTemporarilyUnavailable,
   modifierTemplateId,
+  isDRS,
   actorUid,
 }) {
   return {
@@ -49,6 +52,7 @@ export function buildProductPatch({
     isActive,
     isTemporarilyUnavailable,
     modifierTemplateId: modifierTemplateId || null,
+    isDRS: isDRS || false,
     updatedAt: serverTimestamp(),
     updatedBy: actorUid,
   }

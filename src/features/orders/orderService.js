@@ -48,6 +48,20 @@ export function subscribeOrdersForEvent(eventId, onNext, onError, options = {}) 
   )
 }
 
+export function subscribeDrsOrders(eventId, onNext, onError) {
+  return onSnapshot(
+    query(
+      collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.orders)),
+      where('hasDrs', '==', true),
+      orderBy('createdAt', 'desc'),
+    ),
+    (snapshot) => {
+      onNext(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
+    },
+    onError,
+  )
+}
+
 export function subscribeFoodOrders(eventId, onNext, onError) {
   return onSnapshot(
     query(

@@ -18,6 +18,10 @@ export function buildOrderRecord({
   actorName,
 }) {
   const hasFood = basket.items.some((item) => item.category === 'food')
+  const hasDrs = basket.items.some((item) => item.lineType === 'drs')
+  const drsBottleCount = basket.items
+    .filter((item) => item.lineType === 'drs')
+    .reduce((sum, item) => sum + item.quantity, 0)
 
   return {
     personId: person.id,
@@ -34,6 +38,9 @@ export function buildOrderRecord({
     refundHistory: [],
     currency: 'HUF',
     hasFood,
+    hasDrs,
+    drsBottleCount,
+    drsReturnedCount: 0,
     foodStatus: hasFood ? FOOD_ORDER_STATUSES.new : null,
     foodStatusUpdatedAt: hasFood ? serverTimestamp() : null,
     foodStatusUpdatedByUid: hasFood ? actorUid : null,
