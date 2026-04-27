@@ -1,4 +1,5 @@
 import { serverTimestamp } from 'firebase/firestore'
+import { isFoodCategory } from '../products/productModels'
 
 export const ORDER_STATUSES = {
   finalized: 'finalized',
@@ -17,7 +18,7 @@ export function buildOrderRecord({
   actorUid,
   actorName,
 }) {
-  const hasFood = basket.items.some((item) => item.category === 'food')
+  const hasFood = basket.items.some((item) => isFoodCategory(item.category))
   const hasDrs = basket.items.some((item) => item.lineType === 'drs')
   const drsBottleCount = basket.items
     .filter((item) => item.lineType === 'drs')

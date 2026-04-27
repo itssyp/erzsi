@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
 import { subscribeFoodOrders } from '../orders/orderService'
+import { isFoodCategory } from '../products/productModels'
 import { estimateWaitMinutes, formatWaitTime, getWorkloadLevel } from './kitchenModels'
 
 export function useKitchenWorkload(eventId) {
@@ -18,7 +19,7 @@ export function useKitchenWorkload(eventId) {
 
   const workload = useMemo(() => {
     const countItems = (order) =>
-      order.lines?.filter((l) => l.category === 'food').reduce((s, l) => s + (l.quantity || 0), 0) ?? 0
+      order.lines?.filter((l) => isFoodCategory(l.category)).reduce((s, l) => s + (l.quantity || 0), 0) ?? 0
 
     const newOrders      = orders.filter((o) => (o.foodStatus || FOOD_ORDER_STATUSES.new) === FOOD_ORDER_STATUSES.new)
     const preparingOrders = orders.filter((o) => o.foodStatus === FOOD_ORDER_STATUSES.preparing)

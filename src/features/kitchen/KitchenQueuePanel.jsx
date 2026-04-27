@@ -3,6 +3,7 @@ import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
 import { subscribeFoodOrders, updateFoodOrderStatus } from '../orders/orderService'
 import { useActiveEvent } from '../events/useActiveEvent'
 import { setKitchenClosedStatus } from '../events/eventService'
+import { isFoodCategory } from '../products/productModels'
 import { estimateWaitMinutes, formatWaitTime, getWorkloadLevel } from './kitchenModels'
 
 const nextStatusMap = {
@@ -114,7 +115,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
 
   const workload = useMemo(() => {
     const countFoodItems = (order) =>
-      order.lines.filter((line) => line.category === 'food').reduce((sum, line) => sum + (line.quantity || 0), 0)
+      order.lines.filter((line) => isFoodCategory(line.category)).reduce((sum, line) => sum + (line.quantity || 0), 0)
 
     const newOrders = ordersByStatus[FOOD_ORDER_STATUSES.new]
     const preparingOrders = ordersByStatus[FOOD_ORDER_STATUSES.preparing]
@@ -261,7 +262,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                   const minutesOpen = getMinutesOpen(order.createdAt)
                   const nextStatus = nextStatusMap[status]
                   const late = isLate(status, minutesOpen)
-                  const foodLines = order.lines.filter((line) => line.category === 'food')
+                  const foodLines = order.lines.filter((line) => isFoodCategory(line.category))
 
                   return (
                     <article

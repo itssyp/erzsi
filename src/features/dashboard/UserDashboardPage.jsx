@@ -7,6 +7,7 @@ import { QrCodeCard } from '../user/QrCodeCard'
 import { useUserDashboardData } from '../user/useUserDashboardData'
 import { TabShell } from '../../components/TabShell'
 import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
+import { isFoodCategory } from '../products/productModels'
 
 const FOOD_STATUS_STEPS = [
   FOOD_ORDER_STATUSES.new,
@@ -120,7 +121,7 @@ export function UserDashboardPage() {
               </p>
               <ul className="detail-list">
                 {activeFoodOrder.lines
-                  .filter((line) => line.category === 'food')
+                  .filter((line) => isFoodCategory(line.category))
                   .map((line) => (
                     <li key={line.lineId}>
                       <strong>{line.quantity} x {line.productName}</strong>

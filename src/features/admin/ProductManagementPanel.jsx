@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { read, utils } from 'xlsx'
 import { formatHuf, parseHufInteger } from '../../lib/money'
-import { PRODUCT_CATEGORIES } from '../products/productModels'
+import { PRODUCT_CATEGORIES, normalizeProductCategory } from '../products/productModels'
 import { clearProducts, importProducts, saveProduct, subscribeToProducts } from '../products/productService'
 import { saveModifierTemplate, subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
 
@@ -152,7 +152,7 @@ async function parseImportedProducts(file) {
   rows.slice(1).forEach((row, index) => {
     const rowNumber = index + 2
     const name = String(row[headerMap.name] ?? '').trim()
-    const category = String(row[headerMap.category] ?? '').trim().toLowerCase()
+    const category = normalizeProductCategory(row[headerMap.category])
     const price = parseHufInteger(row[headerMap.price])
     const isDRS = parseImportBoolean(row[headerMap.drs])
     const rowValues = [
@@ -214,7 +214,7 @@ function productMatchesQuery(product, query, templateName) {
     return true
   }
 
-  return [product.name, product.category, templateName]
+  return [product.name, normalizeProductCategory(product.category), templateName]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
@@ -436,7 +436,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
     setProductState({
       productId: product.id,
       name: product.name,
-      category: product.category,
+      category: normalizeProductCategory(product.category),
       price: String(product.price),
       isActive: product.isActive,
       isTemporarilyUnavailable: product.isTemporarilyUnavailable,
@@ -633,7 +633,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       <span>
                         <strong>{product.name}</strong>
                         <small>
-                          {product.category} | {formatHuf(product.price)}{product.isDRS ? ' | DRS' : ''}
+                          {normalizeProductCategory(product.category)} | {formatHuf(product.price)}{product.isDRS ? ' | DRS' : ''}
                         </small>
                       </span>
                       <span className="catalog-record-meta">

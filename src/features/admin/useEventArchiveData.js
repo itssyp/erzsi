@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { normalizeProductCategory } from '../products/productModels'
 import { subscribeToAuditLogs } from '../audit/auditService'
 import { subscribeLedgerEntriesForEvent } from '../ledger/ledgerService'
 import { subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
@@ -50,12 +51,13 @@ function buildEventStats({ people, orders, ledgerEntries }) {
       const refundedQuantity = line.refundedQuantity || 0
       const netQuantity = line.quantity - refundedQuantity
       const netRevenue = line.lineTotal - (line.unitTotal * refundedQuantity)
-      const productKey = line.productId || `${line.category}:${line.productName}`
-      const categoryKey = line.category || 'unknown'
+      const category = normalizeProductCategory(line.category) || 'unknown'
+      const productKey = line.productId || `${category}:${line.productName}`
+      const categoryKey = category
       const existingProduct = productSalesMap.get(productKey) || {
         key: productKey,
         productName: line.productName,
-        category: line.category,
+        category,
         grossQuantity: 0,
         refundedQuantity: 0,
         netQuantity: 0,

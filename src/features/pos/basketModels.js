@@ -1,5 +1,6 @@
 import { serverTimestamp } from 'firebase/firestore'
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
+import { normalizeProductCategory } from '../products/productModels'
 
 export const BASKET_STATUSES = {
   open: 'open',
@@ -108,7 +109,7 @@ export function buildBasketLine({
     mergeKey: buildBasketLineMergeKey(product.id, normalizedCustomization),
     productId: product.id,
     productName: product.name,
-    category: product.category,
+    category: normalizeProductCategory(product.category),
     quantity: 1,
     unitPrice,
     unitTotal: unitPrice + extrasUnitTotal,
@@ -143,7 +144,7 @@ export function buildDrsReturnLine() {
     mergeKey: `${DRS_RETURN_PRODUCT_ID}::default`,
     productId: DRS_RETURN_PRODUCT_ID,
     productName: 'Palack visszaváltás',
-    category: 'Egyebek',
+    category: 'Egyéb',
     quantity: 1,
     unitPrice: -DRS_DEPOSIT_AMOUNT,
     unitTotal: -DRS_DEPOSIT_AMOUNT,

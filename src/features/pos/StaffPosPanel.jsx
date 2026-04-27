@@ -8,6 +8,7 @@ import { PERSON_RECORD_STATUSES, subscribeToPeople } from '../people/personServi
 import { useQrScanner } from '../qr/useQrScanner'
 import { usePosSession } from './usePosSession'
 import { PRODUCT_CATEGORIES, subscribeToProducts } from '../products/productService'
+import { isFoodCategory, normalizeProductCategory } from '../products/productModels'
 import {
   acquireBasketLock,
   cancelBasket,
@@ -28,7 +29,7 @@ import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { useKitchenWorkload } from '../kitchen/useKitchenWorkload'
 import { useActiveEvent } from '../events/useActiveEvent'
 
-const MISC_CATEGORY = 'Egyebek'
+const MISC_CATEGORY = 'Egyéb'
 const DRS_RETURN_PRODUCT = Object.freeze({
   id: DRS_RETURN_PRODUCT_ID,
   name: 'Palack visszaváltás',
@@ -208,14 +209,16 @@ export function StaffPosPanel({ eventId }) {
       .filter((product) => {
         if (!product.isActive) return false
         if (selectedCategory === MISC_CATEGORY) return false
-        return selectedCategory === 'all' ? true : product.category === selectedCategory
+        const normalizedCategory = normalizeProductCategory(product.category)
+        return selectedCategory === 'all' ? true : normalizedCategory === selectedCategory
       })
       .map((product) => {
-        const isFood = product.category === 'food'
+        const normalizedCategory = normalizeProductCategory(product.category)
+        const isFood = isFoodCategory(normalizedCategory)
         if (isFood && activeEvent?.isKitchenClosed) {
-          return { ...product, isTemporarilyUnavailable: true }
+          return { ...product, category: normalizedCategory, isTemporarilyUnavailable: true }
         }
-        return product
+        return { ...product, category: normalizedCategory }
       })
       .sort((left, right) => {
         const leftCategoryIndex = PRODUCT_CATEGORIES.indexOf(left.category)

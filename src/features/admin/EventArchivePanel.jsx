@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { StatusCard } from '../../components/StatusCard'
 import { formatHuf } from '../../lib/money'
 import { subscribeToEventsList } from '../events/eventService'
+import { normalizeProductCategory } from '../products/productModels'
 import { EventStatisticsPanel } from './EventStatisticsPanel'
 import { useEventArchiveData } from './useEventArchiveData'
 
@@ -154,7 +155,7 @@ export function EventArchivePanel({ activeEventId }) {
                     <span>
                       <strong>{product.name}</strong>
                       <small>
-                        {product.category} | {formatHuf(product.price)}
+                        {normalizeProductCategory(product.category)} | {formatHuf(product.price)}
                       </small>
                     </span>
                     <span>

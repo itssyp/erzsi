@@ -2434,13 +2434,14 @@ textarea:disabled {
 
 .catalog-summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   gap: 14px;
 }
 
 .catalog-summary-card {
   display: grid;
   gap: 6px;
+  min-width: 0;
   padding: 16px;
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(198, 19, 44, 0.12);
@@ -2450,6 +2451,7 @@ textarea:disabled {
 .catalog-summary-card strong {
   font-size: 1.1rem;
   line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .catalog-summary-label {
@@ -2471,6 +2473,19 @@ textarea:disabled {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+  min-width: 0;
+}
+
+.catalog-panel-header > div {
+  min-width: 0;
+}
+
+.catalog-panel .secondary-button,
+.catalog-panel .primary-button,
+.catalog-panel .danger-button {
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
 }
 
 .catalog-editor-shell {
@@ -2480,20 +2495,24 @@ textarea:disabled {
 
 .catalog-workbench {
   display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  grid-template-columns: minmax(min(100%, 280px), 340px) minmax(0, 1fr);
   gap: 14px;
   align-items: start;
+  min-width: 0;
 }
 
 .catalog-editor-stack {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .catalog-editor-card,
 .catalog-list-card {
+  container-type: inline-size;
   display: grid;
   gap: 16px;
+  min-width: 0;
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -2511,7 +2530,8 @@ textarea:disabled {
 .catalog-editor-title {
   font-size: 1.05rem;
   font-weight: 800;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 
 .catalog-state-badge {
@@ -2519,6 +2539,7 @@ textarea:disabled {
   align-items: center;
   justify-content: center;
   min-height: 32px;
+  max-width: 100%;
   padding: 0 10px;
   border-radius: var(--radius-pill);
   background: var(--bg);
@@ -2528,7 +2549,8 @@ textarea:disabled {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  white-space: nowrap;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .catalog-state-badge.is-editing {
@@ -2539,7 +2561,7 @@ textarea:disabled {
 
 .catalog-preview-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   gap: 10px;
 }
 
@@ -2548,10 +2570,17 @@ textarea:disabled {
 .catalog-preview-block {
   display: grid;
   gap: 6px;
+  min-width: 0;
   padding: 12px 14px;
   border-radius: var(--radius-md);
   border: 1px solid rgba(220, 205, 209, 0.9);
   background: rgba(255, 255, 255, 0.82);
+}
+
+.catalog-preview-tile strong,
+.catalog-preview-block strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .catalog-preview-label {
@@ -2560,6 +2589,8 @@ textarea:disabled {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .catalog-hint-grid {
@@ -2571,6 +2602,7 @@ textarea:disabled {
 .catalog-preview-shell {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .catalog-extra-preview-list {
@@ -2583,6 +2615,7 @@ textarea:disabled {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
+  min-width: 0;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   background: var(--surface);
@@ -2591,25 +2624,51 @@ textarea:disabled {
 
 .catalog-extra-preview-row strong {
   font-size: 0.875rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .catalog-extra-preview-row span {
   font-size: 0.78rem;
   color: var(--muted);
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .catalog-record-list {
   gap: 8px;
+  max-height: min(52vh, 520px);
+  overflow-y: auto;
+  padding-right: 4px;
+  overscroll-behavior: contain;
+}
+
+.catalog-record-list .record-row {
+  min-width: 0;
+  align-items: flex-start;
+}
+
+.catalog-record-list .record-row span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.catalog-record-list .record-row strong,
+.catalog-record-list .record-row small {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .catalog-record-meta {
   display: grid;
   justify-items: end;
   gap: 3px;
+  min-width: 0;
   flex-shrink: 0;
   font-size: 0.75rem;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .catalog-record-meta small {
@@ -2620,6 +2679,7 @@ textarea:disabled {
 .catalog-empty-state {
   display: grid;
   gap: 6px;
+  min-width: 0;
   padding: 16px;
   border: 1px dashed var(--border);
   border-radius: var(--radius-md);
@@ -2629,11 +2689,13 @@ textarea:disabled {
 .catalog-empty-inline {
   font-size: 0.84rem;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .catalog-structured-section {
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .catalog-field-list {
@@ -2644,6 +2706,7 @@ textarea:disabled {
 .catalog-import-card {
   display: grid;
   gap: 10px;
+  min-width: 0;
   padding: 14px;
   border: 1px dashed rgba(198, 19, 44, 0.28);
   border-radius: var(--radius-md);
@@ -2653,6 +2716,9 @@ textarea:disabled {
 .catalog-import-button {
   justify-self: start;
   cursor: pointer;
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
 }
 
 .catalog-builder-row {
@@ -2660,6 +2726,7 @@ textarea:disabled {
   grid-template-columns: 32px minmax(0, 1fr) 40px;
   gap: 8px;
   align-items: center;
+  min-width: 0;
 }
 
 .catalog-builder-row-extra {
@@ -2679,6 +2746,54 @@ textarea:disabled {
   font-size: 0.72rem;
   font-weight: 700;
   flex-shrink: 0;
+}
+
+.catalog-panel .split-header {
+  min-width: 0;
+}
+
+.catalog-panel .split-header > div {
+  min-width: 0;
+}
+
+.catalog-panel .helper-text,
+.catalog-panel .card-title,
+.catalog-panel .field label,
+.catalog-summary-card .helper-text {
+  overflow-wrap: anywhere;
+}
+
+.catalog-panel .checkbox-row {
+  min-width: 0;
+}
+
+.catalog-panel .checkbox-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.catalog-panel .event-pill {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+@container (max-width: 360px) {
+  .catalog-editor-card .split-header,
+  .catalog-list-card .split-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .catalog-editor-card .catalog-state-badge,
+  .catalog-list-card .catalog-state-badge {
+    align-self: flex-start;
+  }
+
+  .catalog-preview-strip {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ── Floating overlay / modal ── */
@@ -3053,6 +3168,10 @@ textarea:disabled {
   .catalog-record-meta {
     justify-items: start;
     text-align: left;
+  }
+
+  .catalog-record-list {
+    max-height: 42vh;
   }
 
   .split-header {
