@@ -16,13 +16,28 @@ import {
   refreshBasketLock,
   saveBasketItems,
 } from './posService'
-import { buildBasketLine, buildBasketLineMergeKey, buildDrsLine, summarizeBasketItems } from './basketModels'
-import { createDrsReturn } from '../drs/drsService'
+import {
+  DRS_RETURN_PRODUCT_ID,
+  buildBasketLine,
+  buildBasketLineMergeKey,
+  buildDrsLine,
+  buildDrsReturnLine,
+  summarizeBasketItems,
+} from './basketModels'
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { useKitchenWorkload } from '../kitchen/useKitchenWorkload'
 import { useActiveEvent } from '../events/useActiveEvent'
 
-const allCategories = ['all', ...PRODUCT_CATEGORIES]
+const MISC_CATEGORY = 'Egyebek'
+const DRS_RETURN_PRODUCT = Object.freeze({
+  id: DRS_RETURN_PRODUCT_ID,
+  name: 'Palack visszaváltás',
+  category: MISC_CATEGORY,
+  price: -DRS_DEPOSIT_AMOUNT,
+  isActive: true,
+  isDrsReturn: true,
+})
+const allCategories = ['all', ...PRODUCT_CATEGORIES, MISC_CATEGORY]
 const BASKET_ABANDON_CANCEL_MS = 60 * 1000
 const BASKET_HEARTBEAT_MS = 15 * 1000
 const BASKET_SYNC_DEBOUNCE_MS = 220
@@ -100,7 +115,7 @@ function buildCustomizationPayload(template, customizationState) {
 const ProductTile = memo(({ product, onClick, disabled }) => (
   <button
     type="button"
-    className={`product-tile${product.isTemporarilyUnavailable ? ' unavailable' : ''}`}
+    className={`product-tile${product.isTemporarilyUnavailable ? ' unavailable' : ''}${product.isDrsReturn ? ' credit' : ''}`}
     onClick={() => onClick(product)}
     disabled={disabled || product.isTemporarilyUnavailable}
   >
@@ -121,7 +136,7 @@ export function StaffPosPanel({ eventId }) {
   const { user, account } = useAuth()
   const { registerActiveBasket, clearActiveBasket } = usePosSession()
   const { activeEvent } = useActiveEvent()
-  const workload = useKitchenWorkload(eventId)
+  const { workloadError, ...workload } = useKitchenWorkload(eventId)
   const [people, setPeople] = useState([])
   const [products, setProducts] = useState([])
   const [modifierTemplates, setModifierTemplates] = useState([])
@@ -136,9 +151,6 @@ export function StaffPosPanel({ eventId }) {
   const [errorMessage, setErrorMessage] = useState('')
   const [basketSyncing, setBasketSyncing] = useState(false)
   const [pending, setPending] = useState(false)
-  const [drsReturnQty, setDrsReturnQty] = useState('')
-  const [drsReturnPending, setDrsReturnPending] = useState(false)
-  const [drsReturnMessage, setDrsReturnMessage] = useState('')
   const performSwitchToPersonRef = useRef(async () => {})
   const cancelBasketHandlerRef = useRef(async () => {})
   const finalizeBasketHandlerRef = useRef(async () => {})
@@ -192,17 +204,52 @@ export function StaffPosPanel({ eventId }) {
   }, [deferredSearchQuery, displayedPerson, people])
 
   const availableProducts = useMemo(() => {
-    return products.filter((product) => {
-      if (!product.isActive) return false
-      return selectedCategory === 'all' ? true : product.category === selectedCategory
-    }).map((product) => {
-      const isFood = product.category === 'food'
-      if (isFood && activeEvent?.isKitchenClosed) {
-        return { ...product, isTemporarilyUnavailable: true }
-      }
-      return product
-    })
+    const visibleProducts = products
+      .filter((product) => {
+        if (!product.isActive) return false
+        if (selectedCategory === MISC_CATEGORY) return false
+        return selectedCategory === 'all' ? true : product.category === selectedCategory
+      })
+      .map((product) => {
+        const isFood = product.category === 'food'
+        if (isFood && activeEvent?.isKitchenClosed) {
+          return { ...product, isTemporarilyUnavailable: true }
+        }
+        return product
+      })
+      .sort((left, right) => {
+        const leftCategoryIndex = PRODUCT_CATEGORIES.indexOf(left.category)
+        const rightCategoryIndex = PRODUCT_CATEGORIES.indexOf(right.category)
+        const categoryComparison = (leftCategoryIndex === -1 ? PRODUCT_CATEGORIES.length : leftCategoryIndex)
+          - (rightCategoryIndex === -1 ? PRODUCT_CATEGORIES.length : rightCategoryIndex)
+
+        if (categoryComparison !== 0) {
+          return categoryComparison
+        }
+
+        return left.name.localeCompare(right.name, 'hu')
+      })
+    if (selectedCategory === 'all' || selectedCategory === MISC_CATEGORY) {
+      return [...visibleProducts, DRS_RETURN_PRODUCT]
+    }
+    return visibleProducts
   }, [products, selectedCategory, activeEvent?.isKitchenClosed])
+
+  const groupedProducts = useMemo(() => {
+    const groups = new Map()
+
+    availableProducts.forEach((product) => {
+      if (!groups.has(product.category)) {
+        groups.set(product.category, [])
+      }
+
+      groups.get(product.category).push(product)
+    })
+
+    return Array.from(groups, ([category, items]) => ({ category, items }))
+  }, [availableProducts])
+
+  const showProductCategoryHeadings = selectedCategory === 'all'
 
   const basketSummary = useMemo(() => summarizeBasketItems(basketItems), [basketItems])
   const shouldShowSearchResults = searchQuery.trim().length >= 2
@@ -464,6 +511,18 @@ export function StaffPosPanel({ eventId }) {
     }
 
     const currentItems = latestBasketItemsRef.current
+    if (product.isDrsReturn) {
+      const existingReturnIndex = currentItems.findIndex((item) => item.lineType === 'drsReturn')
+      const nextItems = existingReturnIndex >= 0
+        ? currentItems.map((item, index) => (
+            index === existingReturnIndex ? { ...item, quantity: item.quantity + 1 } : item
+          ))
+        : [...currentItems, buildDrsReturnLine()]
+
+      applyOptimisticBasketItems(nextItems)
+      return
+    }
+
     const mergeKey = buildBasketLineMergeKey(product.id, customization)
     const existingIndex = currentItems.findIndex(
       (item) => item.lineType !== 'drs'
@@ -482,7 +541,7 @@ export function StaffPosPanel({ eventId }) {
       const newLine = buildBasketLine({ product, customization })
       const nextItems = [...currentItems, newLine]
       if (product.isDRS) {
-        nextItems.push(buildDrsLine({ parentLineId: newLine.lineId, productName: product.name }))
+        nextItems.push(buildDrsLine({ parentLineId: newLine.lineId }))
       }
       applyOptimisticBasketItems(nextItems)
     }
@@ -531,28 +590,6 @@ export function StaffPosPanel({ eventId }) {
       })
       .filter((item) => item.quantity > 0)
     applyOptimisticBasketItems(nextItems)
-  }
-
-  async function handleDrsReturn() {
-    const qty = Number.parseInt(drsReturnQty, 10)
-    if (!selectedPerson || !Number.isInteger(qty) || qty < 1) return
-    setDrsReturnPending(true)
-    setDrsReturnMessage('')
-    try {
-      const result = await createDrsReturn({
-        eventId,
-        personId: selectedPerson.id,
-        quantity: qty,
-        actorUid: user.uid,
-        actorName: staffName,
-      })
-      setDrsReturnQty('')
-      setDrsReturnMessage(`Visszaváltva: ${formatHuf(result.totalCreditAmount)} jóváírva.`)
-    } catch (error) {
-      setDrsReturnMessage(error.message)
-    } finally {
-      setDrsReturnPending(false)
-    }
   }
 
   function closeCustomization() {
@@ -783,8 +820,12 @@ export function StaffPosPanel({ eventId }) {
           <div className="receipt-body">
             {displayedBasketSummary.items.map((item) => {
               const isDrsLine = item.lineType === 'drs'
+              const isDrsReturnLine = item.lineType === 'drsReturn'
               return (
-                <div key={item.lineId} className={`receipt-line${isDrsLine ? ' receipt-line-drs' : ''}`}>
+                <div
+                  key={item.lineId}
+                  className={`receipt-line${isDrsLine ? ' receipt-line-drs' : ''}${isDrsReturnLine ? ' receipt-line-credit' : ''}`}
+                >
                   <span
                     className="receipt-item-name"
                     style={isDrsLine ? { color: 'var(--muted)', fontSize: '0.8em', paddingLeft: '10px' } : {}}
@@ -840,9 +881,9 @@ export function StaffPosPanel({ eventId }) {
               <span className="receipt-dots" />
               <span>{displayedBasketSummary.itemCount}</span>
             </div>
-            {displayedPerson && displayedBasketSummary.totalAmount > 0 && (
+            {displayedPerson && displayedBasketSummary.totalAmount !== 0 && (
               <div className="receipt-subtotal">
-                <span>Maradék</span>
+                <span>{displayedBasketSummary.totalAmount > 0 ? 'Maradék' : 'Jóváírás után'}</span>
                 <span className="receipt-dots" />
                 <span>{formatHuf((displayedPerson.balance || 0) - displayedBasketSummary.totalAmount)}</span>
               </div>
@@ -874,35 +915,6 @@ export function StaffPosPanel({ eventId }) {
           </div>
         </div>
 
-        {selectedPerson ? (
-          <div className="panel" style={{ marginTop: '8px', padding: '12px 14px' }}>
-            <h5 style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--muted)', marginBottom: '8px' }}>
-              Betétdíj-visszaváltás ({DRS_DEPOSIT_AMOUNT} Ft/palack)
-            </h5>
-            <div className="inline-form">
-              <input
-                type="number"
-                min="1"
-                value={drsReturnQty}
-                onChange={(event) => setDrsReturnQty(event.target.value)}
-                placeholder="Palackok száma"
-                style={{ width: '140px' }}
-                disabled={drsReturnPending}
-              />
-              <button
-                type="button"
-                className="secondary-button"
-                onClick={handleDrsReturn}
-                disabled={drsReturnPending || !drsReturnQty || Number.parseInt(drsReturnQty, 10) < 1}
-              >
-                {drsReturnPending ? '...' : 'Visszaváltás'}
-              </button>
-            </div>
-            {drsReturnMessage ? (
-              <p className="helper-text" style={{ marginTop: '6px' }}>{drsReturnMessage}</p>
-            ) : null}
-          </div>
-        ) : null}
       </div>
 
       {/* RIGHT COLUMN: Product catalog */}
@@ -921,17 +933,17 @@ export function StaffPosPanel({ eventId }) {
             ))}
           </div>
 
-          <div className={`pos-workload-mini ${workload.barClass}`}>
+          <div className={`pos-workload-mini ${workloadError ? 'workload-error-state' : workload.barClass}`}>
             <div className="workload-mini-left">
               <span className="workload-tag">Konyha</span>
-              <span className="workload-level">{workload.label}</span>
+              <span className="workload-level">{workloadError ? 'Hiba' : workload.label}</span>
             </div>
             <div className="workload-mini-center">
               <span className="workload-wait-label">Várható várakozás</span>
-              <span className="workload-wait-value">{workload.formattedWait}</span>
+              <span className="workload-wait-value">{workloadError ? '—' : workload.formattedWait}</span>
             </div>
             <div className="workload-mini-right">
-              <span className="workload-count">{workload.itemCount} tétel</span>
+              <span className="workload-count">{workloadError ? 'Nem elérhető' : `${workload.itemCount} tétel`}</span>
             </div>
           </div>
         </div>
@@ -942,18 +954,29 @@ export function StaffPosPanel({ eventId }) {
           </p>
         )}
 
-        <div
-          className="product-grid"
-          style={{ opacity: !displayedPerson ? 0.45 : 1, pointerEvents: !displayedPerson ? 'none' : 'auto' }}
-        >
-          {availableProducts.map((product) => (
-            <ProductTile
-              key={product.id}
-              product={product}
-              onClick={startCustomization}
-              disabled={pending || !selectedPerson}
-            />
-          ))}
+        <div className="product-grid-scroll">
+          <div
+            className="product-category-list"
+            style={{ opacity: !displayedPerson ? 0.45 : 1, pointerEvents: !displayedPerson ? 'none' : 'auto' }}
+          >
+            {groupedProducts.map((group) => (
+              <section key={group.category} className="product-category-section">
+                {showProductCategoryHeadings ? (
+                  <h4 className="product-category-title">{group.category}</h4>
+                ) : null}
+                <div className="product-grid">
+                  {group.items.map((product) => (
+                    <ProductTile
+                      key={product.id}
+                      product={product}
+                      onClick={startCustomization}
+                      disabled={pending || !selectedPerson}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
         </div>
 
         {/* Customization modal */}

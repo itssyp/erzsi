@@ -1,7 +1,31 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(npm --version)",
+      "Bash(firebase --version)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")",
+      "Bash(ls tests/)",
+      "Bash(ls .firebaserc)",
+      "Bash(java --version)",
+      "Bash(java -version)",
+      "Bash(npm install *)",
+      "Bash(node 01-unit-tests.js)",
+      "Bash(node run-emulator-tests.js)",
+      "Bash(node -e \"const pkg = JSON.parse\\(require\\('fs'\\).readFileSync\\('C:/Users/sheep/Documents/VSC Projects/erzsi-2.0/tests/node_modules/firebase/package.json','utf8'\\)\\); console.log\\('firebase version:', pkg.version\\)\")",
+      "Bash(FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 node 03-security-rules.js)",
+      "Bash(node run-all.js)",
+      "Bash(xargs grep *)",
+      "Bash(firebase login:list)",
+      "Bash(firebase projects:list)",
+      "Bash(gcloud auth *)",
+      "Bash(gcloud config *)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(firebase use *)",
+      "Bash(node -e \"const {initializeApp,applicationDefault}=require\\('firebase-admin/app'\\);const {getFirestore}=require\\('firebase-admin/firestore'\\);const a=initializeApp\\({credential:applicationDefault\\(\\),projectId:'erzsi-2'}\\);getFirestore\\(a\\).collection\\('system'\\).doc\\('runtime'\\).get\\(\\).then\\(d=>console.log\\('ADC OK:',d.exists\\)\\).catch\\(e=>console.log\\('ADC FAIL:',e.message\\)\\).finally\\(\\(\\)=>process.exit\\(\\)\\)\")",
+      "Bash(node -e \"const {execSync}=require\\('child_process'\\); try{const t=execSync\\('firebase auth:print-server-credentials 2>&1',{encoding:'utf8',cwd:'C:/Users/sheep/Documents/VSC Projects/erzsi-2.0'}\\); console.log\\(t.substring\\(0,200\\)\\)}catch\\(e\\){console.log\\('NO:',e.message.substring\\(0,100\\)\\)}\")",
+      "Bash(node -e ' *)",
+      "Bash(GOOGLE_APPLICATION_CREDENTIALS=\"C:/Users/sheep/AppData/Roaming/firebase/barany_szilva_gmail.com_application_default_credentials.json\" node 04-staging-validation.js)"
     ]
   }
 }

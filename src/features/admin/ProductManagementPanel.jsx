@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
-import { formatHuf } from '../../lib/money'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { read, utils } from 'xlsx'
+import { formatHuf, parseHufInteger } from '../../lib/money'
 import { PRODUCT_CATEGORIES } from '../products/productModels'
-import { saveProduct, subscribeToProducts } from '../products/productService'
+import { clearProducts, importProducts, saveProduct, subscribeToProducts } from '../products/productService'
 import { saveModifierTemplate, subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
 
 const emptyProductState = {
@@ -19,6 +20,18 @@ const PRODUCT_AVAILABILITY = {
   active: 'active',
   unavailable: 'unavailable',
   inactive: 'inactive',
+}
+
+const PRODUCT_IMPORT_HEADERS = ['name', 'drs', 'price', 'category']
+const PRODUCT_IMPORT_HEADER_ALIASES = {
+  name: 'name',
+  productname: 'name',
+  drs: 'drs',
+  isdrs: 'drs',
+  price: 'price',
+  ar: 'price',
+  category: 'category',
+  kategoria: 'category',
 }
 
 function createIngredientField(label = '') {
@@ -68,6 +81,132 @@ function buildAvailabilityPatch(availability) {
 
 function normalizeQuery(value) {
   return value.trim().toLowerCase()
+}
+
+function normalizeImportHeader(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '')
+}
+
+function parseImportBoolean(value) {
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  const normalized = String(value ?? '').trim().toLowerCase()
+
+  if (['true', '1', 'yes', 'y', 'igen'].includes(normalized)) {
+    return true
+  }
+
+  if (['false', '0', 'no', 'n', 'nem', ''].includes(normalized)) {
+    return false
+  }
+
+  return null
+}
+
+async function parseImportedProducts(file) {
+  const buffer = await file.arrayBuffer()
+  const workbook = read(buffer, { type: 'array' })
+  const firstSheetName = workbook.SheetNames[0]
+
+  if (!firstSheetName) {
+    throw new Error('The selected Excel file does not contain any sheets.')
+  }
+
+  const sheet = workbook.Sheets[firstSheetName]
+  const rows = utils.sheet_to_json(sheet, {
+    header: 1,
+    raw: false,
+    defval: '',
+    blankrows: false,
+  })
+
+  if (!rows.length) {
+    throw new Error('The selected Excel sheet is empty.')
+  }
+
+  const headerRow = rows[0]
+  const headerMap = {}
+
+  headerRow.forEach((cell, index) => {
+    const normalizedHeader = PRODUCT_IMPORT_HEADER_ALIASES[normalizeImportHeader(cell)]
+    if (normalizedHeader && headerMap[normalizedHeader] === undefined) {
+      headerMap[normalizedHeader] = index
+    }
+  })
+
+  const missingHeaders = PRODUCT_IMPORT_HEADERS.filter((header) => headerMap[header] === undefined)
+  if (missingHeaders.length) {
+    throw new Error(`Missing required columns: ${missingHeaders.join(', ')}.`)
+  }
+
+  const errors = []
+  const importedProducts = []
+
+  rows.slice(1).forEach((row, index) => {
+    const rowNumber = index + 2
+    const name = String(row[headerMap.name] ?? '').trim()
+    const category = String(row[headerMap.category] ?? '').trim().toLowerCase()
+    const price = parseHufInteger(row[headerMap.price])
+    const isDRS = parseImportBoolean(row[headerMap.drs])
+    const rowValues = [
+      row[headerMap.name],
+      row[headerMap.drs],
+      row[headerMap.price],
+      row[headerMap.category],
+    ]
+    const isBlankRow = rowValues.every((value) => String(value ?? '').trim() === '')
+
+    if (isBlankRow) {
+      return
+    }
+
+    const rowErrors = []
+
+    if (!name) {
+      rowErrors.push('name is required')
+    }
+
+    if (!PRODUCT_CATEGORIES.includes(category)) {
+      rowErrors.push(`category must be one of ${PRODUCT_CATEGORIES.join(', ')}`)
+    }
+
+    if (!Number.isInteger(price) || price < 0) {
+      rowErrors.push('price must be a non-negative whole number')
+    }
+
+    if (isDRS === null) {
+      rowErrors.push('drs must be true or false')
+    }
+
+    if (rowErrors.length) {
+      errors.push(`Row ${rowNumber}: ${rowErrors.join('; ')}.`)
+      return
+    }
+
+    importedProducts.push({
+      name,
+      category,
+      price,
+      isDRS,
+    })
+  })
+
+  if (!importedProducts.length && !errors.length) {
+    throw new Error('The selected Excel sheet does not contain any product rows.')
+  }
+
+  if (errors.length) {
+    throw new Error(errors.slice(0, 8).join(' '))
+  }
+
+  return importedProducts
 }
 
 function productMatchesQuery(product, query, templateName) {
@@ -155,6 +294,8 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   const [statusMessage, setStatusMessage] = useState('')
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [importFileName, setImportFileName] = useState('')
+  const importInputRef = useRef(null)
 
   const availabilityState = useMemo(() => getAvailabilityState(productState), [productState])
 
@@ -220,6 +361,59 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
     setProductState(emptyProductState)
     setStatusMessage(isEditing ? 'A termék frissítve lett.' : 'A termék létrejött.')
+  }
+
+  async function handleProductImport(event) {
+    const file = event.target.files?.[0]
+
+    if (!file) {
+      return
+    }
+
+    setImportFileName(file.name)
+
+    await runAction(async () => {
+      const importedProducts = await parseImportedProducts(file)
+      await importProducts({
+        eventId,
+        actorUid,
+        products: importedProducts,
+      })
+
+      setStatusMessage(`${importedProducts.length} termék importálva: ${file.name}`)
+      setImportFileName('')
+
+      if (importInputRef.current) {
+        importInputRef.current.value = ''
+      }
+    })
+
+    if (importInputRef.current) {
+      importInputRef.current.value = ''
+    }
+  }
+
+  async function handleClearProducts() {
+    if (!products.length) {
+      setStatusMessage('Nincs mit törölni a katalógusból.')
+      return
+    }
+
+    const confirmed = window.confirm(`Biztosan törlöd az összes terméket? (${products.length} db)`)
+
+    if (!confirmed) {
+      return
+    }
+
+    await runAction(async () => {
+      const clearedCount = await clearProducts({
+        eventId,
+        actorUid,
+      })
+
+      setProductState(emptyProductState)
+      setStatusMessage(`${clearedCount} termék törölve lett a katalógusból.`)
+    })
   }
 
   async function handleTemplateSubmit(event) {
@@ -382,19 +576,53 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                 <span className="catalog-state-badge">{filteredProducts.length} látható</span>
               </div>
 
-              <div className="field">
-                <label htmlFor="productSearch">Termékek keresése</label>
-                <input
-                  id="productSearch"
-                  type="search"
-                  value={productQuery}
-                  onChange={(event) => setProductQuery(event.target.value)}
-                  placeholder="Keresés termék, kategória vagy kapcsolt sablon alapján"
-                />
-              </div>
+                <div className="field">
+                  <label htmlFor="productSearch">Termékek keresése</label>
+                  <input
+                    id="productSearch"
+                    type="search"
+                    value={productQuery}
+                    onChange={(event) => setProductQuery(event.target.value)}
+                    placeholder="Keresés termék, kategória vagy kapcsolt sablon alapján"
+                  />
+                </div>
 
-              <div className="record-list stacked catalog-record-list">
-                {filteredProducts.length ? (
+                <div className="catalog-import-card">
+                  <div>
+                    <p className="catalog-editor-kicker">Excel import</p>
+                    <h5 className="catalog-editor-title">Terméklista betöltése</h5>
+                  </div>
+                  <p className="helper-text">
+                    Az első munkalap első sora legyen: <strong>name</strong>, <strong>drs</strong>, <strong>price</strong>, <strong>category</strong>.
+                    A <strong>drs</strong> mező `true` vagy `false`, a kategória pedig ezek egyike: {PRODUCT_CATEGORIES.join(', ')}.
+                  </p>
+                  <label className="secondary-button catalog-import-button" htmlFor="productImportFile">
+                    Excel kiválasztása
+                  </label>
+                  <input
+                    id="productImportFile"
+                    ref={importInputRef}
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleProductImport}
+                    disabled={pending}
+                    style={{ display: 'none' }}
+                  />
+                  <span className="helper-text">
+                    {importFileName || 'Minden sor új termékként lesz létrehozva az aktuális esemény katalógusában.'}
+                  </span>
+                  <button
+                    type="button"
+                    className="danger-button catalog-import-button"
+                    onClick={handleClearProducts}
+                    disabled={pending || !products.length}
+                  >
+                    Termékek törlése
+                  </button>
+                </div>
+
+                <div className="record-list stacked catalog-record-list">
+                  {filteredProducts.length ? (
                   filteredProducts.map((product) => (
                     <button
                       key={product.id}

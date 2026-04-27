@@ -5,10 +5,15 @@ import { estimateWaitMinutes, formatWaitTime, getWorkloadLevel } from './kitchen
 
 export function useKitchenWorkload(eventId) {
   const [orders, setOrders] = useState([])
+  const [workloadError, setWorkloadError] = useState(null)
 
   useEffect(() => {
     if (!eventId) return
-    return subscribeFoodOrders(eventId, setOrders, (error) => console.error('Workload subscription error:', error))
+    setWorkloadError(null)
+    return subscribeFoodOrders(eventId, setOrders, (error) => {
+      console.error('Workload subscription error:', error)
+      setWorkloadError(error)
+    })
   }, [eventId])
 
   const workload = useMemo(() => {
@@ -33,5 +38,5 @@ export function useKitchenWorkload(eventId) {
     }
   }, [orders])
 
-  return workload
+  return { ...workload, workloadError }
 }

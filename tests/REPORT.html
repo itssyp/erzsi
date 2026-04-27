@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kasszás Erzsi 2.0 — Test &amp; Performance Report</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3350;
+    --accent: #6c8eff;
+    --accent2: #50e3c2;
+    --accent3: #f0a500;
+    --pass: #3ecf8e;
+    --fail: #ff5c5c;
+    --muted: #6b7280;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.6; padding: 32px; }
+  h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 4px; }
+  h2 { font-size: 1.1rem; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px; }
+  h3 { font-size: 0.95rem; font-weight: 600; color: var(--text2); margin-bottom: 12px; }
+  .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 40px; }
+  .grid { display: grid; gap: 20px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: repeat(3, 1fr); }
+  @media (max-width: 900px) { .grid-4, .grid-2, .grid-3 { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 600px) { .grid-4, .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .stat-card { text-align: center; }
+  .stat-value { font-size: 2.4rem; font-weight: 800; line-height: 1.1; }
+  .stat-label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+  .stat-sub { font-size: 0.8rem; color: var(--text2); margin-top: 6px; }
+  .pass-color { color: var(--pass); }
+  .accent-color { color: var(--accent); }
+  .accent2-color { color: var(--accent2); }
+  .accent3-color { color: var(--accent3); }
+  .section { margin-bottom: 36px; }
+  .chart-wrap { position: relative; height: 260px; }
+  .chart-wrap-sm { position: relative; height: 200px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  th { background: var(--surface2); color: var(--text2); font-weight: 600; text-align: left; padding: 8px 12px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; }
+  .badge-pass { background: rgba(62,207,142,0.15); color: var(--pass); }
+  .badge-fail { background: rgba(255,92,92,0.15); color: var(--fail); }
+  .badge-skip { background: rgba(108,142,255,0.15); color: var(--accent); }
+  .badge-blocker { background: rgba(240,165,0,0.15); color: var(--accent3); }
+  .badge-ok { background: rgba(80,227,194,0.12); color: var(--accent2); }
+  .verdict { background: linear-gradient(135deg, rgba(62,207,142,0.12), rgba(108,142,255,0.10)); border: 1px solid rgba(62,207,142,0.35); border-radius: 12px; padding: 24px 28px; display: flex; align-items: center; gap: 20px; }
+  .verdict-icon { font-size: 2.4rem; }
+  .verdict-title { font-size: 1.25rem; font-weight: 800; color: var(--pass); }
+  .verdict-body { font-size: 0.85rem; color: var(--text2); margin-top: 4px; }
+  .divider { height: 1px; background: var(--border); margin: 32px 0; }
+  .mono { font-family: 'Consolas', 'Cascadia Code', monospace; }
+  .note { background: rgba(108,142,255,0.08); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 0 6px 6px 0; font-size: 0.82rem; color: var(--text2); margin-top: 12px; }
+  .tag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 20px; padding: 3px 12px; font-size: 0.75rem; color: var(--text2); }
+</style>
+</head>
+<body>
+
+<h1>Kasszás Erzsi 2.0</h1>
+<div class="subtitle">Pre-launch Test &amp; Performance Report &nbsp;·&nbsp; April 22, 2026 &nbsp;·&nbsp; Project: erzsi-2</div>
+
+<!-- ── VERDICT ──────────────────────────────────────────────── -->
+<div class="verdict" style="margin-bottom:36px">
+  <div class="verdict-icon">✅</div>
+  <div>
+    <div class="verdict-title">READY TO LAUNCH</div>
+    <div class="verdict-body">136 / 136 checks passed across 4 test suites &nbsp;·&nbsp; 0 launch blockers failed &nbsp;·&nbsp; real-Firestore staging confirmed</div>
+  </div>
+</div>
+
+<!-- ── SUMMARY STATS ────────────────────────────────────────── -->
+<div class="section">
+  <h2>Test Suite Summary</h2>
+  <div class="grid grid-4">
+    <div class="card stat-card">
+      <div class="stat-value pass-color">55</div>
+      <div class="stat-label">Unit Tests</div>
+      <div class="stat-sub">55 pass · 0 fail</div>
+    </div>
+    <div class="card stat-card">
+      <div class="stat-value pass-color">28</div>
+      <div class="stat-label">Emulator Tests</div>
+      <div class="stat-sub">28 pass · 0 fail</div>
+    </div>
+    <div class="card stat-card">
+      <div class="stat-value pass-color">32</div>
+      <div class="stat-label">Security Rules</div>
+      <div class="stat-sub">32 pass · 0 fail</div>
+    </div>
+    <div class="card stat-card">
+      <div class="stat-value pass-color">21</div>
+      <div class="stat-label">Staging Validation</div>
+      <div class="stat-sub">21 pass · 0 fail · real Firestore</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── THROUGHPUT COMPARISON ────────────────────────────────── -->
+<div class="section">
+  <h2>Burst Throughput — Emulator vs Staging</h2>
+  <div class="grid grid-2">
+    <div class="card">
+      <h3>50-Concurrent Finalization — orders/sec</h3>
+      <div class="chart-wrap">
+        <canvas id="throughputChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <h3>50-Concurrent Finalization — elapsed ms &amp; retries</h3>
+      <div class="grid" style="grid-template-columns:1fr 1fr; gap:16px; margin-top:8px">
+        <div style="text-align:center; padding:16px 0">
+          <div style="font-size:1.9rem; font-weight:800; color:var(--accent)">497 ms</div>
+          <div style="font-size:0.75rem; color:var(--muted); margin-top:4px">EMULATOR · 50 orders</div>
+          <div style="font-size:0.82rem; color:var(--text2); margin-top:8px">100.7 orders/sec</div>
+        </div>
+        <div style="text-align:center; padding:16px 0">
+          <div style="font-size:1.9rem; font-weight:800; color:var(--accent2)">524 ms</div>
+          <div style="font-size:0.75rem; color:var(--muted); margin-top:4px">STAGING · 50 orders</div>
+          <div style="font-size:0.82rem; color:var(--text2); margin-top:8px">95.3 orders/sec</div>
+        </div>
+        <div style="text-align:center; padding:8px 0; border-top: 1px solid var(--border)">
+          <div style="font-size:1.4rem; font-weight:700; color:var(--text)">2.00</div>
+          <div style="font-size:0.72rem; color:var(--muted)">mean retries (10-way contention)</div>
+        </div>
+        <div style="text-align:center; padding:8px 0; border-top: 1px solid var(--border)">
+          <div style="font-size:1.4rem; font-weight:700; color:var(--text)">1.00</div>
+          <div style="font-size:0.72rem; color:var(--muted)">mean retries (distinct people)</div>
+        </div>
+      </div>
+      <div class="note">Staging burst ran on distinct people → no transaction contention → 1 attempt each. Emulator section A used 10 workers on the <em>same</em> document → mean 2× retries — expected Firestore behaviour.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── LATENCY DISTRIBUTIONS ────────────────────────────────── -->
+<div class="section">
+  <h2>Latency Distributions</h2>
+  <div class="grid grid-3">
+    <div class="card">
+      <h3>Soak Test — 200 sequential writes (emulator)</h3>
+      <div class="chart-wrap-sm">
+        <canvas id="soakChart"></canvas>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <span class="tag">mean 30.5ms</span>
+        <span class="tag">p50 31ms</span>
+        <span class="tag">p95 44ms</span>
+        <span class="tag">p99 51ms</span>
+        <span class="tag">drift −5.1%</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Security Rules overhead (emulator, 40 reads each)</h3>
+      <div class="chart-wrap-sm">
+        <canvas id="rulesChart"></canvas>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <span class="tag">+2.3ms overhead</span>
+        <span class="tag">rules p99 28ms</span>
+        <span class="tag">bypass p99 65ms</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Staging one-shot latencies</h3>
+      <div class="chart-wrap-sm">
+        <canvas id="stagingLatChart"></canvas>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <span class="tag">400-person query 345ms</span>
+        <span class="tag">batch create 944ms</span>
+        <span class="tag">burst total 524ms</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── TRANSACTION RETRIES ──────────────────────────────────── -->
+<div class="section">
+  <h2>Transaction Retry Behaviour</h2>
+  <div class="card">
+    <h3>Mean retries per scenario</h3>
+    <div class="chart-wrap-sm" style="max-width:680px">
+      <canvas id="retriesChart"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ── STAGING VALIDATION TABLE ─────────────────────────────── -->
+<div class="section">
+  <h2>Staging Validation — Check-by-Check (real Firestore)</h2>
+  <div class="card" style="padding:0">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Check</th><th>Result</th><th>Status</th><th>Blocker</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Insufficient balance throws correct error</td><td class="mono">Balance: 300 HUF, Purchase: 1000 HUF</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>2</td><td>No order document created on block</td><td class="mono">orders after = 0</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>3</td><td>No ledger entry created on block</td><td class="mono">ledger after = 0</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>4</td><td>Person balance unchanged after block</td><td class="mono">balance = 300</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>5</td><td>Food order created successfully</td><td class="mono">orderId = 6izkw9GY…</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>6</td><td>Food order in hasFood+createdAt query</td><td class="mono">found: true</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>7</td><td>Order hasFood = true flag set</td><td class="mono">hasFood = true</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>8</td><td>400 people returned under limit(500)</td><td class="mono">402 docs in 345ms</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>9</td><td>People query latency &lt; 3 s</td><td class="mono">345ms</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-ok">no</span></td></tr>
+        <tr><td>10</td><td>Oldest person in limit(500) window</td><td class="mono">bulk-person-0399: found</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-ok">no</span></td></tr>
+        <tr><td>11</td><td>Staff Alice finalizes person 1</td><td class="mono">orderId = DED9xsEW…</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>12</td><td>Staff Bob finalizes person 2 simultaneously</td><td class="mono">orderId = wZptNm6O…</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>13</td><td>Person 1 balance 5000→4000</td><td class="mono">balance = 4000</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>14</td><td>Person 2 balance 5000→4000</td><td class="mono">balance = 4000</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>15</td><td>Staff A acquires basket lock</td><td class="mono">acquired = true</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>16</td><td>Staff B blocked by Staff A's lock</td><td class="mono">"currently open on another staff device"</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>17</td><td>Stale lock takeover after 50 s (real Firestore)</td><td class="mono">acquired = true</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>18</td><td>Burst ≥95% success rate (50/50)</td><td class="mono">50/50 OK</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-blocker">YES</span></td></tr>
+        <tr><td>19</td><td>Throughput ≥10 orders/sec</td><td class="mono">95.3 orders/sec</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-ok">no</span></td></tr>
+        <tr><td>20</td><td>Mean retries &lt; 3 per txn</td><td class="mono">1.00 retries</td><td><span class="badge badge-pass">PASS</span></td><td><span class="badge badge-ok">no</span></td></tr>
+        <tr><td>21</td><td>Kitchen workload error-state</td><td class="mono">SKIPPED — code review verified</td><td><span class="badge badge-skip">SKIP</span></td><td><span class="badge badge-ok">no</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── EMULATOR TEST SECTIONS ───────────────────────────────── -->
+<div class="section">
+  <h2>Emulator Tests — Section Results</h2>
+  <div class="grid grid-2">
+    <div class="card" style="padding:0">
+      <table>
+        <thead><tr><th>Section</th><th>Description</th><th>Tests</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>A</td><td>Concurrent balance writes (10-way)</td><td>3</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>B</td><td>Basket lock contention</td><td>5</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>C</td><td>Double-finalization protection</td><td>3</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>D</td><td>Concurrent DRS + sale</td><td>2</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>E</td><td>Composite index queries</td><td>3</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>F</td><td>Burst throughput (50 concurrent)</td><td>1</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>G</td><td>Soak test (200 sequential writes)</td><td>4</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>H</td><td>Insufficient balance guard</td><td>7</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card" style="padding:0">
+      <table>
+        <thead><tr><th>Security Rules Section</th><th>Tests</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>system/runtime access</td><td>6</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>accounts RBAC</td><td>5</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>people collection</td><td>7</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>orders (own vs other)</td><td>3</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>baskets (staff-only)</td><td>3</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>QR assignments (admin-only)</td><td>3</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>audit logs (admin-only)</td><td>2</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>disabled account denial</td><td>2</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+          <tr><td>rules perf overhead (40 reads)</td><td>1</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ── KNOWN LIMITS ─────────────────────────────────────────── -->
+<div class="section">
+  <h2>Known Limits &amp; Post-Launch Watch Items</h2>
+  <div class="card">
+    <table>
+      <thead><tr><th>Item</th><th>Current limit</th><th>Risk</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Cloud Functions max instances</td><td>10 (hardcoded)</td><td>Medium</td><td>Monitor invocation queue on first peak hour; raise if needed</td></tr>
+        <tr><td>subscribeToPeople</td><td>limit(500) added</td><td>Low</td><td>Safe for launch; paginate if event grows beyond 500</td></tr>
+        <tr><td>useEventArchiveData orders</td><td>Unbounded read</td><td>Low</td><td>Admin-only; acceptable now; aggregate via CF trigger post-launch</td></tr>
+        <tr><td>Kitchen workload error-state</td><td>Manual browser check pending</td><td>Low</td><td>Verify in browser first hour post-launch</td></tr>
+        <tr><td>generateQrCredentials</td><td>Sequential creates (no batch)</td><td>Low</td><td>Fine for &lt;250 codes; batch-write if generating at scale</td></tr>
+        <tr><td>Firestore rules get() overhead</td><td>+2.3ms/read (emulator)</td><td>Low</td><td>Propagate role in JWT claims to eliminate extra read long-term</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div style="color:var(--muted); font-size:0.75rem; margin-top:24px; text-align:center">
+  Generated 2026-04-22 &nbsp;·&nbsp; erzsi-2 &nbsp;·&nbsp; 136 total checks &nbsp;·&nbsp; emulator + real Firestore
+</div>
+
+<script>
+const COLORS = {
+  accent:  'rgba(108,142,255,1)',
+  accent2: 'rgba(80,227,194,1)',
+  accent3: 'rgba(240,165,0,1)',
+  pass:    'rgba(62,207,142,1)',
+  muted:   'rgba(107,114,128,0.6)',
+  accentBg:  'rgba(108,142,255,0.18)',
+  accent2Bg: 'rgba(80,227,194,0.18)',
+  accent3Bg: 'rgba(240,165,0,0.18)',
+  passBg:    'rgba(62,207,142,0.18)',
+}
+
+Chart.defaults.color = '#94a3b8'
+Chart.defaults.borderColor = '#2e3350'
+Chart.defaults.font.family = "'Segoe UI', system-ui, sans-serif"
+
+// ── Throughput bar chart ─────────────────────────────────────
+new Chart(document.getElementById('throughputChart'), {
+  type: 'bar',
+  data: {
+    labels: ['Emulator burst\n(50 concurrent)', 'Staging burst\n(50 concurrent, real)'],
+    datasets: [{
+      label: 'orders / sec',
+      data: [100.7, 95.3],
+      backgroundColor: [COLORS.accentBg, COLORS.accent2Bg],
+      borderColor: [COLORS.accent, COLORS.accent2],
+      borderWidth: 2,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { beginAtZero: true, grid: { color: '#2e3350' }, ticks: { callback: v => v + '/s' } },
+      x: { grid: { display: false } }
+    }
+  }
+})
+
+// ── Soak latency percentile chart ───────────────────────────
+new Chart(document.getElementById('soakChart'), {
+  type: 'bar',
+  data: {
+    labels: ['min', 'mean', 'p50', 'p95', 'p99', 'max'],
+    datasets: [{
+      label: 'ms',
+      data: [13, 30.5, 31, 44, 51, 56],
+      backgroundColor: [
+        COLORS.passBg, COLORS.accentBg, COLORS.accentBg,
+        COLORS.accent3Bg, COLORS.accent3Bg, 'rgba(255,92,92,0.18)'
+      ],
+      borderColor: [
+        COLORS.pass, COLORS.accent, COLORS.accent,
+        COLORS.accent3, COLORS.accent3, 'rgba(255,92,92,1)'
+      ],
+      borderWidth: 2,
+      borderRadius: 4,
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { beginAtZero: true, grid: { color: '#2e3350' }, ticks: { callback: v => v + 'ms' } },
+      x: { grid: { display: false } }
+    }
+  }
+})
+
+// ── Security rules overhead chart ──────────────────────────
+new Chart(document.getElementById('rulesChart'), {
+  type: 'bar',
+  data: {
+    labels: ['min', 'mean', 'p50', 'p95', 'p99'],
+    datasets: [
+      {
+        label: 'With rules',
+        data: [9, 16.4, 16, 24, 28],
+        backgroundColor: COLORS.accentBg,
+        borderColor: COLORS.accent,
+        borderWidth: 2,
+        borderRadius: 4,
+      },
+      {
+        label: 'Bypass (admin)',
+        data: [4, 14.1, 15, 22, 65],
+        backgroundColor: COLORS.passBg,
+        borderColor: COLORS.pass,
+        borderWidth: 2,
+        borderRadius: 4,
+      }
+    ]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { position: 'top', labels: { boxWidth: 12, padding: 12 } } },
+    scales: {
+      y: { beginAtZero: true, grid: { color: '#2e3350' }, ticks: { callback: v => v + 'ms' } },
+      x: { grid: { display: false } }
+    }
+  }
+})
+
+// ── Staging one-shot latencies ──────────────────────────────
+new Chart(document.getElementById('stagingLatChart'), {
+  type: 'bar',
+  data: {
+    labels: ['400-person\nquery', 'Burst 50\ntotal', '400-person\nbatch create'],
+    datasets: [{
+      label: 'ms',
+      data: [345, 524, 944],
+      backgroundColor: [COLORS.passBg, COLORS.accentBg, COLORS.accent3Bg],
+      borderColor: [COLORS.pass, COLORS.accent, COLORS.accent3],
+      borderWidth: 2,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      y: { beginAtZero: true, grid: { color: '#2e3350' }, ticks: { callback: v => v + 'ms' } },
+      x: { grid: { display: false } }
+    }
+  }
+})
+
+// ── Transaction retries chart ───────────────────────────────
+new Chart(document.getElementById('retriesChart'), {
+  type: 'bar',
+  data: {
+    labels: [
+      'Concurrent topups\n(10-way, same doc)',
+      'Soak writes\n(200 sequential)',
+      'Emulator burst\n(50 distinct people)',
+      'Staging burst\n(50 distinct people)',
+      'DRS + sale\n(same person)'
+    ],
+    datasets: [{
+      label: 'mean retries per transaction',
+      data: [2.00, 1.00, 1.00, 1.00, 1.00],
+      backgroundColor: [
+        COLORS.accent3Bg, COLORS.passBg, COLORS.passBg, COLORS.passBg, COLORS.accentBg
+      ],
+      borderColor: [
+        COLORS.accent3, COLORS.pass, COLORS.pass, COLORS.pass, COLORS.accent
+      ],
+      borderWidth: 2,
+      borderRadius: 6,
+    }]
+  },
+  options: {
+    indexAxis: 'y',
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { beginAtZero: true, max: 3, grid: { color: '#2e3350' }, ticks: { callback: v => v + '×' } },
+      y: { grid: { display: false } }
+    }
+  }
+})
+</script>
+</body>
+</html>

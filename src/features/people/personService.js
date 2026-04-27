@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDoc,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -125,6 +126,7 @@ export function subscribeToPeople(eventId, onNext, onError) {
     query(
       collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.people)),
       orderBy('createdAt', 'desc'),
+      limit(500),
     ),
     (snapshot) => {
       onNext(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))

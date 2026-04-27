@@ -10,6 +10,7 @@ import { AUDIT_TYPES } from '../audit/auditModels'
 import { buildLedgerEntryRecord, LEDGER_ENTRY_TYPES } from '../ledger/ledgerModels'
 import { buildOrderRecord } from '../orders/orderModels'
 import { PERSON_RECORD_STATUSES } from '../people/personModels'
+import { buildDrsReturnRecord, DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import {
   BASKET_STATUSES,
   buildOpenBasketRecord,
@@ -241,6 +242,7 @@ export async function finalizeBasket({
   const personRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.people, personId))
   const orderRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.orders)))
   const ledgerRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.ledgerEntries)))
+  const drsReturnRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.drsReturns)))
   const auditLogWrite = createAuditLogWrite({
     eventId,
     type: AUDIT_TYPES.orderFinalization,
@@ -277,19 +279,36 @@ export async function finalizeBasket({
       throw new Error('Basket is empty.')
     }
 
+    const basketSummary = summarizeBasketItems(basket.items)
+    const totalAmount = basket.totalAmount ?? basketSummary.totalAmount
+    const finalizedBasket = {
+      ...basket,
+      items: basketSummary.items,
+      itemCount: basketSummary.itemCount,
+      totalAmount,
+    }
+    const drsReturnQuantity = basketSummary.items
+      .filter((item) => item.lineType === 'drsReturn')
+      .reduce((sum, item) => sum + item.quantity, 0)
+    const drsReturnCreditAmount = drsReturnQuantity * DRS_DEPOSIT_AMOUNT
     const balanceBefore = person.balance || 0
+    const balanceAfter = balanceBefore - totalAmount
 
-    if (balanceBefore < 0) {
+    if (totalAmount > 0 && balanceBefore < 0) {
       throw new Error(`${person.displayName} is already below zero and cannot purchase again yet.`)
     }
 
-    const totalAmount = basket.totalAmount || summarizeBasketItems(basket.items).totalAmount
-    const balanceAfter = balanceBefore - totalAmount
+    if (totalAmount > 0 && balanceAfter < 0) {
+      throw new Error(
+        `${person.displayName} has insufficient balance. ` +
+        `Balance: ${balanceBefore} HUF, Purchase: ${totalAmount} HUF.`,
+      )
+    }
 
     transaction.set(
       orderRef,
       buildOrderRecord({
-        basket,
+        basket: finalizedBasket,
         person,
         actorUid: staffUid,
         actorName: staffName,
@@ -306,7 +325,7 @@ export async function finalizeBasket({
     transaction.set(
       ledgerRef,
       buildLedgerEntryRecord({
-        type: LEDGER_ENTRY_TYPES.sale,
+        type: totalAmount < 0 ? LEDGER_ENTRY_TYPES.drsReturn : LEDGER_ENTRY_TYPES.sale,
         actorUid: staffUid,
         personId,
         amount: -totalAmount,
@@ -315,12 +334,29 @@ export async function finalizeBasket({
         reason: orderRef.id,
       }),
     )
+    if (drsReturnQuantity > 0) {
+      transaction.set(
+        drsReturnRef,
+        buildDrsReturnRecord({
+          personId,
+          personDisplayName: person.displayName,
+          personInternalId: person.internalId,
+          quantity: drsReturnQuantity,
+          balanceBefore,
+          balanceAfter,
+          actorUid: staffUid,
+          actorName: staffName,
+        }),
+      )
+    }
     transaction.set(
       auditLogWrite.ref,
       {
         ...auditLogWrite.data,
         details: {
           totalAmount,
+          drsReturnQuantity,
+          drsReturnCreditAmount,
           balanceBefore,
           balanceAfter,
         },

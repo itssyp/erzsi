@@ -1,6 +1,7 @@
 import {
   collection,
   doc,
+  getDocs,
   onSnapshot,
   orderBy,
   query,
@@ -12,6 +13,8 @@ import { createAuditLogWrite } from '../audit/auditService'
 import { AUDIT_TYPES } from '../audit/auditModels'
 import { parseHufInteger } from '../../lib/money'
 import { buildProductPatch, buildProductRecord } from './productModels'
+
+const MAX_IMPORT_BATCH_SIZE = 400
 
 export function subscribeToProducts(eventId, onNext, onError) {
   return onSnapshot(
@@ -87,4 +90,100 @@ export async function saveProduct({
 
   batch.set(auditLogWrite.ref, auditLogWrite.data)
   await batch.commit()
+}
+
+export async function importProducts({
+  eventId,
+  actorUid,
+  products,
+}) {
+  if (!Array.isArray(products) || products.length === 0) {
+    throw new Error('No valid products were provided for import.')
+  }
+
+  for (const product of products) {
+    const parsedPrice = parseHufInteger(product.price)
+
+    if (!Number.isInteger(parsedPrice) || parsedPrice < 0) {
+      throw new Error(`Invalid product price for "${product.name}".`)
+    }
+  }
+
+  for (let startIndex = 0; startIndex < products.length; startIndex += MAX_IMPORT_BATCH_SIZE) {
+    const batch = writeBatch(db)
+    const chunk = products.slice(startIndex, startIndex + MAX_IMPORT_BATCH_SIZE)
+
+    chunk.forEach((product) => {
+      const targetRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.products)))
+      batch.set(targetRef, buildProductRecord({
+        name: product.name,
+        category: product.category,
+        price: parseHufInteger(product.price),
+        isActive: true,
+        isTemporarilyUnavailable: false,
+        modifierTemplateId: '',
+        isDRS: product.isDRS,
+        actorUid,
+      }))
+    })
+
+    await batch.commit()
+  }
+
+  const auditBatch = writeBatch(db)
+  const auditLogWrite = createAuditLogWrite({
+    eventId,
+    type: AUDIT_TYPES.import,
+    actorUid,
+    summary: `Imported ${products.length} products`,
+    targetType: 'productImport',
+    targetId: null,
+    details: {
+      importedCount: products.length,
+      categories: [...new Set(products.map((product) => product.category))].sort(),
+    },
+  })
+
+  auditBatch.set(auditLogWrite.ref, auditLogWrite.data)
+  await auditBatch.commit()
+}
+
+export async function clearProducts({
+  eventId,
+  actorUid,
+}) {
+  const snapshot = await getDocs(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.products)))
+
+  if (!snapshot.size) {
+    return 0
+  }
+
+  for (let startIndex = 0; startIndex < snapshot.docs.length; startIndex += MAX_IMPORT_BATCH_SIZE) {
+    const batch = writeBatch(db)
+    const chunk = snapshot.docs.slice(startIndex, startIndex + MAX_IMPORT_BATCH_SIZE)
+
+    chunk.forEach((item) => {
+      batch.delete(item.ref)
+    })
+
+    await batch.commit()
+  }
+
+  const auditBatch = writeBatch(db)
+  const auditLogWrite = createAuditLogWrite({
+    eventId,
+    type: AUDIT_TYPES.productChange,
+    actorUid,
+    summary: `Cleared ${snapshot.size} products`,
+    targetType: 'productCollection',
+    targetId: null,
+    details: {
+      clearedCount: snapshot.size,
+    },
+  })
+
+  auditBatch.set(auditLogWrite.ref, auditLogWrite.data)
+  await auditBatch.commit()
+
+  return snapshot.size
 }

@@ -5,6 +5,8 @@ export const BASKET_STATUSES = {
   open: 'open',
 }
 
+export const DRS_RETURN_PRODUCT_ID = '__drs_return__'
+
 export function computeLineUnitTotal(item) {
   const extrasUnitTotal = (item.customization?.extras || []).reduce(
     (sum, extra) => sum + extra.price * extra.quantity,
@@ -116,7 +118,7 @@ export function buildBasketLine({
   }
 }
 
-export function buildDrsLine({ parentLineId, productName }) {
+export function buildDrsLine({ parentLineId }) {
   return {
     lineId: crypto.randomUUID(),
     lineType: 'drs',
@@ -128,6 +130,24 @@ export function buildDrsLine({ parentLineId, productName }) {
     unitPrice: DRS_DEPOSIT_AMOUNT,
     unitTotal: DRS_DEPOSIT_AMOUNT,
     lineTotal: DRS_DEPOSIT_AMOUNT,
+    modifierTemplateId: null,
+    customization: null,
+  }
+}
+
+export function buildDrsReturnLine() {
+  return {
+    lineId: crypto.randomUUID(),
+    lineType: 'drsReturn',
+    parentLineId: null,
+    mergeKey: `${DRS_RETURN_PRODUCT_ID}::default`,
+    productId: DRS_RETURN_PRODUCT_ID,
+    productName: 'Palack visszaváltás',
+    category: 'Egyebek',
+    quantity: 1,
+    unitPrice: -DRS_DEPOSIT_AMOUNT,
+    unitTotal: -DRS_DEPOSIT_AMOUNT,
+    lineTotal: -DRS_DEPOSIT_AMOUNT,
     modifierTemplateId: null,
     customization: null,
   }

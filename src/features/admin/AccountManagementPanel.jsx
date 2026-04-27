@@ -75,9 +75,19 @@ export function AccountManagementPanel({ actorUid }) {
     })
   }
 
-  async function handleRoleChange(uid, role) {
+  async function handleRoleChange(account, role) {
+    if (account.uid === actorUid && account.role === ROLES.admin && role !== ROLES.admin) {
+      const confirmed = window.confirm(
+        'A saját admin jogosultságodat készülsz elvenni. Ha folytatod, elveszítheted az admin felülethez való hozzáférést. Biztosan folytatod?',
+      )
+
+      if (!confirmed) {
+        return
+      }
+    }
+
     await runAction(async () => {
-      await setAccountRole({ uid, role })
+      await setAccountRole({ uid: account.uid, role })
       setStatusMessage(`A szerepkör frissült erre: ${role}.`)
     })
   }
@@ -187,7 +197,7 @@ export function AccountManagementPanel({ actorUid }) {
                     type="button"
                     className="secondary-button"
                     disabled={pending || account.status === ACCOUNT_STATUSES.disabled || account.role === ROLES.staff}
-                    onClick={() => handleRoleChange(account.uid, ROLES.staff)}
+                    onClick={() => handleRoleChange(account, ROLES.staff)}
                   >
                     Staff
                   </button>
@@ -195,7 +205,7 @@ export function AccountManagementPanel({ actorUid }) {
                     type="button"
                     className="secondary-button"
                     disabled={pending || account.status === ACCOUNT_STATUSES.disabled || account.role === ROLES.admin}
-                    onClick={() => handleRoleChange(account.uid, ROLES.admin)}
+                    onClick={() => handleRoleChange(account, ROLES.admin)}
                   >
                     Admin
                   </button>

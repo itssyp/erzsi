@@ -1,0 +1,16 @@
+{
+  "name": "erzsi-stress-tests",
+  "version": "1.0.0",
+  "description": "Performance and stress tests for Kasszas Erzsi 2.0",
+  "type": "module",
+  "scripts": {
+    "unit": "node 01-unit-tests.js",
+    "emulator": "node run-emulator-tests.js",
+    "all": "node run-all.js"
+  },
+  "dependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "firebase": "^10.14.1",
+    "firebase-admin": "^12.7.0"
+  }
+}
