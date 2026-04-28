@@ -22,6 +22,17 @@ const PRODUCT_AVAILABILITY = {
   inactive: 'inactive',
 }
 
+const CATEGORY_COLOR_MAP = {
+  'Sör':       { key: 'sor',        color: '#d97706' },
+  'Bor':       { key: 'bor',        color: '#7c3aed' },
+  'Hosszúital':{ key: 'hosszuital', color: '#ea580c' },
+  'Üditő':     { key: 'udito',      color: '#059669' },
+  'Nasi':      { key: 'nasi',       color: '#db2777' },
+  'Kaja':      { key: 'kaja',       color: '#dc2626' },
+}
+
+const DEFAULT_CATEGORY = { key: 'default', color: '#9ca3af' }
+
 const PRODUCT_IMPORT_HEADERS = ['name', 'drs', 'price', 'category']
 const PRODUCT_IMPORT_HEADER_ALIASES = {
   name: 'name',
@@ -291,6 +302,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   const [templateState, setTemplateState] = useState(emptyTemplateState)
   const [productQuery, setProductQuery] = useState('')
   const [templateQuery, setTemplateQuery] = useState('')
+  const [activeCatalogSection, setActiveCatalogSection] = useState('products')
   const [statusMessage, setStatusMessage] = useState('')
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -323,9 +335,17 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   const filteredProducts = useMemo(() => {
     const query = normalizeQuery(productQuery)
 
-    return products.filter((product) =>
-      productMatchesQuery(product, query, templateLookup[product.modifierTemplateId || '']?.name || ''),
-    )
+    return products
+      .filter((product) =>
+        productMatchesQuery(product, query, templateLookup[product.modifierTemplateId || '']?.name || ''),
+      )
+      .sort((a, b) => {
+        const catA = PRODUCT_CATEGORIES.indexOf(normalizeProductCategory(a.category))
+        const catB = PRODUCT_CATEGORIES.indexOf(normalizeProductCategory(b.category))
+        const catDiff = (catA === -1 ? 999 : catA) - (catB === -1 ? 999 : catB)
+        if (catDiff !== 0) return catDiff
+        return a.name.localeCompare(b.name, 'hu')
+      })
   }, [productQuery, products, templateLookup])
   const filteredTemplates = useMemo(() => {
     const query = normalizeQuery(templateQuery)
@@ -518,44 +538,40 @@ export function ProductManagementPanel({ eventId, actorUid }) {
     <div className="admin-section">
       <section className="page-heading">
         <span className="eyebrow">Katalógus</span>
-        <h3>Termékek és újrahasználható ételmódosítók</h3>
-        <p className="muted">
-          A termékek eseményhez kötve maradnak, így a későbbi események indulhatnak üresen vagy egy tiszta katalógus másolatával.
-        </p>
+        <h3>Termékek és módosítósablonok</h3>
       </section>
 
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
       {statusMessage ? <div className="status-inline">{statusMessage}</div> : null}
 
-      <section className="panel catalog-summary-panel">
-        <div className="catalog-summary-grid">
-          <div className="catalog-summary-card">
-            <span className="catalog-summary-label">Termékek</span>
-            <strong>{products.length}</strong>
-            <p className="helper-text">Először válassz, utána szerkessz. A kereső hosszú listák mellett is mindig látható marad.</p>
-          </div>
-          <div className="catalog-summary-card">
-            <span className="catalog-summary-label">Módosítósablonok</span>
-            <strong>{modifierTemplates.length}</strong>
-            <p className="helper-text">A sablonok most strukturált összetevő- és extra sorokat használnak szabad szöveges formázás helyett.</p>
-          </div>
-          <div className="catalog-summary-card">
-            <span className="catalog-summary-label">Ajánlott folyamat</span>
-            <strong>Bal oldalon válassz vagy hozz létre, jobb oldalon szerkessz</strong>
-            <p className="helper-text">A szerkesztő mindig a kiválasztott elem mellett marad, nem rejtve a lista alá.</p>
-          </div>
-        </div>
-      </section>
+      <div className="catalog-mode-tabs" role="tablist" aria-label="Katalógus nézetek">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeCatalogSection === 'products'}
+          className={`catalog-mode-tab${activeCatalogSection === 'products' ? ' active' : ''}`}
+          onClick={() => setActiveCatalogSection('products')}
+        >
+          <span>Termékek</span>
+          <strong>{products.length}</strong>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeCatalogSection === 'templates'}
+          className={`catalog-mode-tab${activeCatalogSection === 'templates' ? ' active' : ''}`}
+          onClick={() => setActiveCatalogSection('templates')}
+        >
+          <span>Módosítósablonok</span>
+          <strong>{modifierTemplates.length}</strong>
+        </button>
+      </div>
 
-      <div className="two-column-grid">
+      <div className="catalog-mode-panel">
+        {activeCatalogSection === 'products' ? (
         <section className="panel catalog-panel">
           <div className="catalog-panel-header">
-            <div>
-              <h4 className="card-title">Termékkezelés</h4>
-              <p className="helper-text">
-                Először keress rá vagy válassz ki egy meglévő terméket, majd szerkeszd a környezet elvesztése nélkül.
-              </p>
-            </div>
+            <h4 className="card-title">Termékkezelés</h4>
             <button
               type="button"
               className="secondary-button"
@@ -569,88 +585,85 @@ export function ProductManagementPanel({ eventId, actorUid }) {
           <div className="catalog-workbench">
             <div className="catalog-list-card">
               <div className="split-header">
-                <div>
-                  <p className="catalog-editor-kicker">Kiválasztás</p>
-                  <h5 className="catalog-editor-title">Termékek</h5>
-                </div>
-                <span className="catalog-state-badge">{filteredProducts.length} látható</span>
+                <h5 className="catalog-editor-title">Termékek</h5>
+                <span className="catalog-state-badge">{filteredProducts.length}</span>
               </div>
 
-                <div className="field">
-                  <label htmlFor="productSearch">Termékek keresése</label>
-                  <input
-                    id="productSearch"
-                    type="search"
-                    value={productQuery}
-                    onChange={(event) => setProductQuery(event.target.value)}
-                    placeholder="Keresés termék, kategória vagy kapcsolt sablon alapján"
-                  />
-                </div>
+              <input
+                id="productSearch"
+                type="search"
+                value={productQuery}
+                onChange={(event) => setProductQuery(event.target.value)}
+                placeholder="Keresés…"
+                aria-label="Termékek keresése"
+              />
 
-                <div className="catalog-import-card">
-                  <div>
-                    <p className="catalog-editor-kicker">Excel import</p>
-                    <h5 className="catalog-editor-title">Terméklista betöltése</h5>
-                  </div>
-                  <p className="helper-text">
-                    Az első munkalap első sora legyen: <strong>name</strong>, <strong>drs</strong>, <strong>price</strong>, <strong>category</strong>.
-                    A <strong>drs</strong> mező `true` vagy `false`, a kategória pedig ezek egyike: {PRODUCT_CATEGORIES.join(', ')}.
-                  </p>
-                  <label className="secondary-button catalog-import-button" htmlFor="productImportFile">
-                    Excel kiválasztása
-                  </label>
-                  <input
-                    id="productImportFile"
-                    ref={importInputRef}
-                    type="file"
-                    accept=".xlsx,.xls"
-                    onChange={handleProductImport}
-                    disabled={pending}
-                    style={{ display: 'none' }}
-                  />
-                  <span className="helper-text">
-                    {importFileName || 'Minden sor új termékként lesz létrehozva az aktuális esemény katalógusában.'}
-                  </span>
-                  <button
-                    type="button"
-                    className="danger-button catalog-import-button"
-                    onClick={handleClearProducts}
-                    disabled={pending || !products.length}
-                  >
-                    Termékek törlése
-                  </button>
-                </div>
+              <div className="catalog-import-bar">
+                <label
+                  className="secondary-button catalog-import-btn"
+                  htmlFor="productImportFile"
+                  title={`Oszlopok: name, drs, price, category (${PRODUCT_CATEGORIES.join(', ')})`}
+                >
+                  ↑ Excel import
+                </label>
+                <input
+                  id="productImportFile"
+                  ref={importInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={handleProductImport}
+                  disabled={pending}
+                  style={{ display: 'none' }}
+                />
+                <button
+                  type="button"
+                  className="danger-button catalog-import-btn"
+                  onClick={handleClearProducts}
+                  disabled={pending || !products.length}
+                  title={`Összes termék törlése (${products.length} db)`}
+                >
+                  ⊘ Törlés
+                </button>
+                {importFileName ? <span className="catalog-import-filename">{importFileName}</span> : null}
+              </div>
 
-                <div className="record-list stacked catalog-record-list">
-                  {filteredProducts.length ? (
-                  filteredProducts.map((product) => (
-                    <button
-                      key={product.id}
-                      type="button"
-                      className={`record-row${productState.productId === product.id ? ' selected' : ''}`}
-                      onClick={() => loadProductIntoForm(product)}
-                    >
-                      <span>
-                        <strong>{product.name}</strong>
-                        <small>
-                          {normalizeProductCategory(product.category)} | {formatHuf(product.price)}{product.isDRS ? ' | DRS' : ''}
-                        </small>
-                      </span>
-                      <span className="catalog-record-meta">
-                        {product.modifierTemplateId ? (
-                          <small>{templateLookup[product.modifierTemplateId]?.name || 'Kapcsolt sablon'}</small>
-                        ) : null}
-                        {getAvailabilityState(product) === PRODUCT_AVAILABILITY.unavailable
-                          ? 'Nem elérhető'
-                          : getAvailabilityState(product) === PRODUCT_AVAILABILITY.active
-                            ? 'Aktív'
-                            : 'Inaktív'}
-                      </span>
-                    </button>
-                  ))
+              <div className="record-list stacked catalog-record-list">
+                {filteredProducts.length ? (
+                  filteredProducts.map((product) => {
+                    const status = getAvailabilityState(product)
+                    const { key: categoryKey, color: categoryColor } = CATEGORY_COLOR_MAP[normalizeProductCategory(product.category)] || DEFAULT_CATEGORY
+                    const templateName = templateLookup[product.modifierTemplateId]?.name
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        className={`record-row catalog-product-row${productState.productId === product.id ? ' selected' : ''}`}
+                        style={{ borderLeft: `4px solid ${categoryColor}` }}
+                        onClick={() => loadProductIntoForm(product)}
+                      >
+                        <span className="catalog-row-body">
+                          <strong>{product.name}</strong>
+                          <span className="catalog-row-chips">
+                            <span className={`catalog-cat-chip catalog-cat-chip--${categoryKey}`}>{normalizeProductCategory(product.category)}</span>
+                            <span className="catalog-price-chip">{formatHuf(product.price)}</span>
+                            {product.isDRS && <span className="catalog-drs-chip">DRS</span>}
+                            {templateName && <span className="catalog-template-name">{templateName}</span>}
+                          </span>
+                        </span>
+                        <span
+                          className={`catalog-status-dot catalog-status-dot--${status}`}
+                          title={
+                            status === PRODUCT_AVAILABILITY.unavailable ? 'Ideiglenesen nem elérhető'
+                            : status === PRODUCT_AVAILABILITY.inactive ? 'Inaktív'
+                            : 'Aktív'
+                          }
+                        />
+                      </button>
+                    )
+                  })
                 ) : (
                   <div className="catalog-empty-state">
-                    <strong>Nincs a keresésnek megfelelő termék.</strong>
+                    <strong>Nincs találat.</strong>
                     <p className="helper-text">Próbálj tágabb keresést, vagy hozz létre új terméket.</p>
                   </div>
                 )}
@@ -659,12 +672,9 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
             <div className="catalog-editor-card">
               <div className="split-header">
-                <div>
-                  <p className="catalog-editor-kicker">Szerkesztő</p>
-                  <h5 className="catalog-editor-title">
-                    {productState.productId ? `${productState.name || 'termék'} szerkesztése` : 'Új termék létrehozása'}
-                  </h5>
-                </div>
+                <h5 className="catalog-editor-title">
+                  {productState.productId ? `${productState.name || 'termék'} szerkesztése` : 'Új termék'}
+                </h5>
                 <span className={`catalog-state-badge ${productState.productId ? 'is-editing' : ''}`}>
                   {productState.productId ? 'Szerkesztés' : 'Új'}
                 </span>
@@ -672,22 +682,22 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
               <div className="catalog-preview-strip">
                 <div className="catalog-preview-tile">
-                  <span className="catalog-preview-label">Ár előnézet</span>
-                  <strong>{productState.price ? formatHuf(Number(productState.price) || 0) : 'Adj meg árat'}</strong>
+                  <span className="catalog-preview-label">Ár</span>
+                  <strong>{productState.price ? formatHuf(Number(productState.price) || 0) : '—'}</strong>
                 </div>
                 <div className="catalog-preview-tile">
                   <span className="catalog-preview-label">Elérhetőség</span>
                   <strong>
                     {availabilityState === PRODUCT_AVAILABILITY.unavailable
-                      ? 'Ideiglenesen nem elérhető'
+                      ? 'Szünetel'
                       : availabilityState === PRODUCT_AVAILABILITY.inactive
                         ? 'Inaktív'
                         : 'Aktív'}
                   </strong>
                 </div>
                 <div className="catalog-preview-tile">
-                  <span className="catalog-preview-label">Módosító beállítás</span>
-                  <strong>{templateLookup[productState.modifierTemplateId]?.name || 'Nincs kapcsolt sablon'}</strong>
+                  <span className="catalog-preview-label">Módosító</span>
+                  <strong>{templateLookup[productState.modifierTemplateId]?.name || '—'}</strong>
                 </div>
               </div>
 
@@ -702,21 +712,25 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                   />
                 </div>
                 <div className="field">
-                  <label htmlFor="productCategory">Kategória</label>
-                  <select
-                    id="productCategory"
-                    value={productState.category}
-                    onChange={(event) => setProductState((current) => ({ ...current, category: event.target.value }))}
-                  >
-                    {PRODUCT_CATEGORIES.map((category) => (
-                      <option key={category} value={category}>
-                        {category}
-                      </option>
-                    ))}
-                  </select>
+                  <label>Kategória</label>
+                  <div className="catalog-category-picker">
+                    {PRODUCT_CATEGORIES.map((cat) => {
+                      const { key, color } = CATEGORY_COLOR_MAP[cat] || DEFAULT_CATEGORY
+                      return (
+                        <button
+                          key={cat}
+                          type="button"
+                          className={`catalog-category-chip catalog-cat-chip--${key}${productState.category === cat ? ' selected' : ''}`}
+                          onClick={() => setProductState((c) => ({ ...c, category: cat }))}
+                        >
+                          {cat}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
                 <div className="field">
-                  <label htmlFor="productPrice">Ár (egész HUF)</label>
+                  <label htmlFor="productPrice">Ár (HUF)</label>
                   <input
                     id="productPrice"
                     value={productState.price}
@@ -724,7 +738,6 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                     placeholder="1200"
                     required
                   />
-                  <span className="helper-text">Csak egész forint összeget használj.</span>
                 </div>
                 <div className="field">
                   <label htmlFor="productModifier">Módosítósablon</label>
@@ -742,11 +755,9 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       </option>
                     ))}
                   </select>
-                  <span className="helper-text">
-                    {sortedTemplates.length
-                      ? 'Válassz sablont, ha a staff módosíthat összetevőket vagy fizetős extrákat.'
-                      : 'Még nincs sablon. Először hozz létre egyet a sablonpanelen.'}
-                  </span>
+                  {!sortedTemplates.length && (
+                    <span className="helper-text">Még nincs sablon – először hozz létre egyet.</span>
+                  )}
                 </div>
                 <div className="field">
                   <label className="checkbox-row">
@@ -757,18 +768,16 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                         setProductState((current) => ({ ...current, isDRS: event.target.checked }))
                       }
                     />
-                    <span style={{ fontWeight: 500 }}>Betétdíjas termék (DRS, 50 Ft/palack)</span>
+                    <span style={{ fontWeight: 500 }}>Betétdíjas (DRS, +50 Ft)</span>
                   </label>
-                  <span className="helper-text">
-                    Bejelölve a termék mellé automatikusan 50 Ft betétdíj-sor kerül a kasszában.
-                  </span>
+                  <span className="helper-text">A kasszában automatikusan +50 Ft betétdíj-sor jelenik meg.</span>
                 </div>
                 <div className="field">
                   <label>Elérhetőség</label>
                   <div className="availability-toggle">
                     <button
                       type="button"
-                      className={`availability-option${availabilityState === PRODUCT_AVAILABILITY.active ? ' active' : ''}`}
+                      className={`availability-option availability-option--active${availabilityState === PRODUCT_AVAILABILITY.active ? ' active' : ''}`}
                       onClick={() =>
                         setProductState((current) => ({
                           ...current,
@@ -776,11 +785,11 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                         }))
                       }
                     >
-                      Aktív
+                      ✓ Aktív
                     </button>
                     <button
                       type="button"
-                      className={`availability-option${availabilityState === PRODUCT_AVAILABILITY.unavailable ? ' active' : ''}`}
+                      className={`availability-option availability-option--unavailable${availabilityState === PRODUCT_AVAILABILITY.unavailable ? ' active' : ''}`}
                       onClick={() =>
                         setProductState((current) => ({
                           ...current,
@@ -788,11 +797,11 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                         }))
                       }
                     >
-                      Ideiglenesen nem elérhető
+                      ⚠ Szünetel
                     </button>
                     <button
                       type="button"
-                      className={`availability-option${availabilityState === PRODUCT_AVAILABILITY.inactive ? ' active' : ''}`}
+                      className={`availability-option availability-option--inactive${availabilityState === PRODUCT_AVAILABILITY.inactive ? ' active' : ''}`}
                       onClick={() =>
                         setProductState((current) => ({
                           ...current,
@@ -800,13 +809,13 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                         }))
                       }
                     >
-                      Inaktív
+                      ✕ Inaktív
                     </button>
                   </div>
                 </div>
                 <div className="button-row">
                   <button type="submit" className="primary-button" disabled={pending}>
-                    {productState.productId ? 'Termék frissítése' : 'Termék mentése'}
+                    {productState.productId ? 'Frissítés' : 'Mentés'}
                   </button>
                   {productState.productId ? (
                     <button
@@ -815,7 +824,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       onClick={() => setProductState(emptyProductState)}
                       disabled={pending}
                     >
-                      Szerkesztés megszakítása
+                      Mégse
                     </button>
                   ) : null}
                 </div>
@@ -823,15 +832,12 @@ export function ProductManagementPanel({ eventId, actorUid }) {
             </div>
           </div>
         </section>
+        ) : null}
 
+        {activeCatalogSection === 'templates' ? (
         <section className="panel catalog-panel">
           <div className="catalog-panel-header">
-            <div>
-              <h4 className="card-title">Módosítósablonok</h4>
-              <p className="helper-text">
-                Válassz sablont a listából, majd szerkeszd az összetevőket és extrákat külön mezőkkel, nyers szöveg helyett.
-              </p>
-            </div>
+            <h4 className="card-title">Módosítósablonok</h4>
             <button
               type="button"
               className="secondary-button"
@@ -845,23 +851,18 @@ export function ProductManagementPanel({ eventId, actorUid }) {
           <div className="catalog-workbench">
             <div className="catalog-list-card">
               <div className="split-header">
-                <div>
-                  <p className="catalog-editor-kicker">Kiválasztás</p>
-                  <h5 className="catalog-editor-title">Módosítósablonok</h5>
-                </div>
-                <span className="catalog-state-badge">{filteredTemplates.length} látható</span>
+                <h5 className="catalog-editor-title">Sablonok</h5>
+                <span className="catalog-state-badge">{filteredTemplates.length}</span>
               </div>
 
-              <div className="field">
-                <label htmlFor="templateSearch">Sablonok keresése</label>
-                <input
-                  id="templateSearch"
-                  type="search"
-                  value={templateQuery}
-                  onChange={(event) => setTemplateQuery(event.target.value)}
-                  placeholder="Keresés sablon, összetevő vagy extra alapján"
-                />
-              </div>
+              <input
+                id="templateSearch"
+                type="search"
+                value={templateQuery}
+                onChange={(event) => setTemplateQuery(event.target.value)}
+                placeholder="Keresés…"
+                aria-label="Sablonok keresése"
+              />
 
               <div className="record-list stacked catalog-record-list">
                 {filteredTemplates.length ? (
@@ -869,20 +870,32 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                     <button
                       key={template.id}
                       type="button"
-                      className={`record-row${templateState.templateId === template.id ? ' selected' : ''}`}
+                      className={`record-row catalog-template-row${templateState.templateId === template.id ? ' selected' : ''}`}
                       onClick={() => loadTemplateIntoForm(template)}
                     >
-                      <span>
+                      <span className="catalog-row-body">
                         <strong>{template.name}</strong>
-                        <small>
-                          {(template.defaultIncludedIngredients || []).length} alapértelmezett | {(template.optionalExtras || []).length} extra
-                        </small>
+                        {(template.defaultIncludedIngredients || []).length > 0 && (
+                          <span className="catalog-row-chips">
+                            {(template.defaultIncludedIngredients || []).slice(0, 3).map((ing) => (
+                              <span key={ing.label} className="catalog-ing-pill">{ing.label}</span>
+                            ))}
+                            {(template.defaultIncludedIngredients || []).length > 3 && (
+                              <span className="catalog-ing-pill catalog-ing-pill--more">
+                                +{(template.defaultIncludedIngredients || []).length - 3}
+                              </span>
+                            )}
+                            {(template.optionalExtras || []).length > 0 && (
+                              <span className="catalog-extras-count">{(template.optionalExtras || []).length} extra</span>
+                            )}
+                          </span>
+                        )}
                       </span>
                     </button>
                   ))
                 ) : (
                   <div className="catalog-empty-state">
-                    <strong>Nincs a keresésnek megfelelő sablon.</strong>
+                    <strong>Nincs találat.</strong>
                     <p className="helper-text">Próbálj tágabb keresést, vagy hozz létre új sablont.</p>
                   </div>
                 )}
@@ -892,12 +905,9 @@ export function ProductManagementPanel({ eventId, actorUid }) {
             <div className="catalog-editor-stack">
               <div className="catalog-editor-card">
                 <div className="split-header">
-                  <div>
-                    <p className="catalog-editor-kicker">Sablonszerkesztő</p>
-                    <h5 className="catalog-editor-title">
-                      {templateState.templateId ? `${templateState.name || 'sablon'} szerkesztése` : 'Módosítósablon létrehozása'}
-                    </h5>
-                  </div>
+                  <h5 className="catalog-editor-title">
+                    {templateState.templateId ? `${templateState.name || 'sablon'} szerkesztése` : 'Új sablon'}
+                  </h5>
                   <span className={`catalog-state-badge ${templateState.templateId ? 'is-editing' : ''}`}>
                     {templateState.templateId ? 'Szerkesztés' : 'Új'}
                   </span>
@@ -916,15 +926,11 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
                   <div className="catalog-structured-section">
                     <div className="split-header">
-                      <div>
-                        <span className="catalog-preview-label">Alapértelmezett összetevők</span>
-                        <p className="helper-text">Minden sor egy eltávolítható alap összetevő lesz a POS folyamatban.</p>
-                      </div>
+                      <span className="catalog-preview-label">Alapértelmezett összetevők</span>
                       <button type="button" className="secondary-button" onClick={addIngredientField}>
-                        Összetevő hozzáadása
+                        + Összetevő
                       </button>
                     </div>
-
                     <div className="catalog-field-list">
                       {templateState.defaultIncludedIngredients.map((field, index) => (
                         <div key={field.id} className="catalog-builder-row">
@@ -940,7 +946,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                             onClick={() => removeIngredientField(field.id)}
                             aria-label={`${index + 1}. összetevő eltávolítása`}
                           >
-                            -
+                            −
                           </button>
                         </div>
                       ))}
@@ -949,16 +955,19 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
                   <div className="catalog-structured-section">
                     <div className="split-header">
-                      <div>
-                        <span className="catalog-preview-label">Választható extrák</span>
-                        <p className="helper-text">Add meg az elnevezést, a felárat és a maximális mennyiséget minden extrához.</p>
-                      </div>
+                      <span className="catalog-preview-label">Választható extrák</span>
                       <button type="button" className="secondary-button" onClick={addExtraField}>
-                        Extra hozzáadása
+                        + Extra
                       </button>
                     </div>
-
                     <div className="catalog-field-list">
+                      <div className="catalog-builder-row catalog-builder-row-extra catalog-builder-row-heading" aria-hidden="true">
+                        <span />
+                        <span>Extra neve</span>
+                        <span>Felár</span>
+                        <span>Max.</span>
+                        <span />
+                      </div>
                       {templateState.optionalExtras.map((field, index) => (
                         <div key={field.id} className="catalog-builder-row catalog-builder-row-extra">
                           <span className="catalog-builder-index">{index + 1}</span>
@@ -985,7 +994,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                             onClick={() => removeExtraField(field.id)}
                             aria-label={`${index + 1}. extra eltávolítása`}
                           >
-                            -
+                            −
                           </button>
                         </div>
                       ))}
@@ -994,7 +1003,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
                   <div className="button-row">
                     <button type="submit" className="primary-button" disabled={pending}>
-                      {templateState.templateId ? 'Sablon frissítése' : 'Sablon mentése'}
+                      {templateState.templateId ? 'Frissítés' : 'Mentés'}
                     </button>
                     {templateState.templateId ? (
                       <button
@@ -1003,7 +1012,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                         onClick={() => setTemplateState(emptyTemplateState)}
                         disabled={pending}
                       >
-                        Szerkesztés megszakítása
+                        Mégse
                       </button>
                     ) : null}
                   </div>
@@ -1017,7 +1026,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                     <h5 className="catalog-editor-title">Amit a staff látni fog</h5>
                   </div>
                   <span className="catalog-state-badge">
-                    {sanitizedIngredientsPreview.length} alapértelmezett | {sanitizedExtrasPreview.length} extra
+                    {sanitizedIngredientsPreview.length} alap | {sanitizedExtrasPreview.length} extra
                   </span>
                 </div>
 
@@ -1057,6 +1066,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
             </div>
           </div>
         </section>
+        ) : null}
       </div>
     </div>
   )

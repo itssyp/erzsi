@@ -25,7 +25,8 @@
       "Bash(node -e \"const {initializeApp,applicationDefault}=require\\('firebase-admin/app'\\);const {getFirestore}=require\\('firebase-admin/firestore'\\);const a=initializeApp\\({credential:applicationDefault\\(\\),projectId:'erzsi-2'}\\);getFirestore\\(a\\).collection\\('system'\\).doc\\('runtime'\\).get\\(\\).then\\(d=>console.log\\('ADC OK:',d.exists\\)\\).catch\\(e=>console.log\\('ADC FAIL:',e.message\\)\\).finally\\(\\(\\)=>process.exit\\(\\)\\)\")",
       "Bash(node -e \"const {execSync}=require\\('child_process'\\); try{const t=execSync\\('firebase auth:print-server-credentials 2>&1',{encoding:'utf8',cwd:'C:/Users/sheep/Documents/VSC Projects/erzsi-2.0'}\\); console.log\\(t.substring\\(0,200\\)\\)}catch\\(e\\){console.log\\('NO:',e.message.substring\\(0,100\\)\\)}\")",
       "Bash(node -e ' *)",
-      "Bash(GOOGLE_APPLICATION_CREDENTIALS=\"C:/Users/sheep/AppData/Roaming/firebase/barany_szilva_gmail.com_application_default_credentials.json\" node 04-staging-validation.js)"
+      "Bash(GOOGLE_APPLICATION_CREDENTIALS=\"C:/Users/sheep/AppData/Roaming/firebase/barany_szilva_gmail.com_application_default_credentials.json\" node 04-staging-validation.js)",
+      "Bash(npx vite *)"
     ]
   }
 }

@@ -1,6 +1,5 @@
 import { AccountManagementPanel } from '../admin/AccountManagementPanel'
 import { AuditLogPanel } from '../admin/AuditLogPanel'
-import { EventArchivePanel } from '../admin/EventArchivePanel'
 import { EventManagementPanel } from '../admin/EventManagementPanel'
 import { PeopleManagementPanel } from '../admin/PeopleManagementPanel'
 import { DrsSummaryPanel } from '../drs/DrsSummaryPanel'
@@ -8,6 +7,65 @@ import { StatusCard } from '../../components/StatusCard'
 import { useAuth } from '../auth/useAuth'
 import { useActiveEvent } from '../events/useActiveEvent'
 import { TabShell } from '../../components/TabShell'
+
+function OverviewTab({ activeEvent, activeEventId, account, user, runtime }) {
+  return (
+    <div className="dashboard-grid">
+      <section className="panel admin-overview-event">
+        <div className="admin-overview-event-header">
+          <div>
+            <span className="eyebrow">Active event</span>
+            <h3>{activeEvent?.name || '—'}</h3>
+          </div>
+          {activeEvent ? (
+            <span className="event-pill status-active">active</span>
+          ) : (
+            <span className="event-pill">none</span>
+          )}
+        </div>
+        <ul className="detail-list">
+          <li><strong>Code</strong><span style={{ fontFamily: 'monospace', fontSize: '0.82rem' }}>{activeEvent?.code || '-'}</span></li>
+          <li><strong>ID</strong><span style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>{activeEventId || '-'}</span></li>
+          <li><strong>Status</strong><span style={{ textTransform: 'capitalize' }}>{activeEvent?.status || '-'}</span></li>
+          <li><strong>Starts</strong><span>{activeEvent?.startsOn || '-'}</span></li>
+        </ul>
+        {!activeEvent ? (
+          <p className="helper-text" style={{ marginTop: '8px' }}>
+            Go to <strong>Események</strong> to create or activate an event.
+          </p>
+        ) : null}
+      </section>
+
+      <section className="panel">
+        <span className="eyebrow">Admin account</span>
+        <h3 style={{ marginTop: '2px', marginBottom: '12px', fontSize: '1.1rem' }}>
+          {account?.displayName || user?.displayName || '—'}
+        </h3>
+        <ul className="detail-list">
+          <li><strong>E-mail</strong><span style={{ fontSize: '0.82rem' }}>{account?.email || user?.email || '-'}</span></li>
+          <li><strong>Role</strong><span>Admin</span></li>
+        </ul>
+      </section>
+
+      <section className="panel">
+        <span className="eyebrow">Runtime</span>
+        <h3 style={{ marginTop: '2px', marginBottom: '12px', fontSize: '1.1rem' }}>System state</h3>
+        <ul className="detail-list">
+          <li>
+            <strong>Runtime doc</strong>
+            <span style={{ fontFamily: 'monospace', fontSize: '0.76rem', wordBreak: 'break-all' }}>
+              {runtime ? (activeEventId ? `→ ${activeEventId}` : 'present, no active event') : 'missing or empty'}
+            </span>
+          </li>
+          <li>
+            <strong>Staff views</strong>
+            <span>{activeEventId ? 'open' : 'locked — no active event'}</span>
+          </li>
+        </ul>
+      </section>
+    </div>
+  )
+}
 
 export function AdminDashboardPage() {
   const { account, user } = useAuth()
@@ -18,57 +76,27 @@ export function AdminDashboardPage() {
       id: 'overview',
       label: 'Áttekintés',
       component: (
-        <div className="dashboard-grid">
-          <section className="panel">
-            <h3 className="card-title">Aktív esemény</h3>
-            <ul className="detail-list">
-              <li><strong>Név</strong> <span>{activeEvent?.name || '-'}</span></li>
-              <li><strong>Azonosító</strong> <span style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{activeEventId || '-'}</span></li>
-              <li><strong>Állapot</strong> <span style={{ textTransform: 'capitalize' }}>{activeEvent?.status || '-'}</span></li>
-              <li><strong>Kezdet</strong> <span>{activeEvent?.startsOn || '-'}</span></li>
-            </ul>
-          </section>
-
-          <section className="panel">
-            <h3 className="card-title">Admin fiók</h3>
-            <ul className="detail-list">
-              <li><strong>Név</strong> <span>{account?.displayName || user?.displayName || '-'}</span></li>
-              <li><strong>E-mail</strong> <span style={{ fontSize: '0.82rem' }}>{account?.email || user?.email || '-'}</span></li>
-              <li><strong>Szerepkör</strong> <span>Admin</span></li>
-            </ul>
-          </section>
-
-          <section className="panel">
-            <h3 className="card-title">Gyors műveletek</h3>
-            <p className="helper-text" style={{ marginBottom: '12px' }}>A fenti fülekkel kezelheted az eseményt és az adatait.</p>
-            <ul className="detail-list">
-              <li><strong>Események fül</strong> <span>Események létrehozása és aktiválása</span></li>
-              <li><strong>Személyek fül</strong> <span>Perszónák importálása, fiókok kapcsolása és QR-azonosítók kezelése</span></li>
-              <li><strong>Katalógus oldal</strong> <span>Termékek és módosítók kezelése a közös staff/admin útvonalon</span></li>
-              <li><strong>Fiókok fül</strong> <span>Staff és admin fiókok kezelése</span></li>
-              <li><strong>Napló fül</strong> <span>Teljes tevékenységi napló</span></li>
-            </ul>
-          </section>
-        </div>
+        <OverviewTab
+          activeEvent={activeEvent}
+          activeEventId={activeEventId}
+          account={account}
+          user={user}
+          runtime={runtime}
+        />
       ),
     },
     {
       id: 'events',
       label: 'Események',
-      component: (
-        <div className="stack-block">
-          <EventManagementPanel activeEventId={activeEventId} actorUid={user?.uid} />
-          <EventArchivePanel activeEventId={activeEventId} />
-        </div>
-      ),
+      component: <EventManagementPanel activeEventId={activeEventId} actorUid={user?.uid} />,
     },
     {
       id: 'people',
-      label: 'Személyek és pénzügyek',
+      label: 'Személyek',
       component: activeEventId ? (
         <PeopleManagementPanel eventId={activeEventId} actorUid={user?.uid} />
       ) : (
-        <StatusCard title="Nincs aktív esemény" tone="warning" body="Először válassz vagy hozz létre egy eseményt." />
+        <StatusCard title="Nincs aktív esemény" tone="warning" body="Először válassz vagy hozz létre egy eseményt az Események fülön." />
       ),
     },
     {
@@ -88,10 +116,12 @@ export function AdminDashboardPage() {
     {
       id: 'audit',
       label: 'Napló',
-      component: activeEventId ? (
-        <AuditLogPanel eventId={activeEventId} />
-      ) : (
-        <StatusCard title="Nincs aktív esemény" tone="warning" body="Először válassz vagy hozz létre egy eseményt." />
+      component: (
+        <AuditLogPanel
+          eventId={activeEventId}
+          activeEventId={activeEventId}
+          showEventSelector
+        />
       ),
     },
   ]
@@ -114,10 +144,10 @@ export function AdminDashboardPage() {
         >
           <ul className="detail-list">
             <li>
-              <strong>Jelenlegi runtime dokumentum:</strong> {runtime ? JSON.stringify(runtime) : 'Hiányzik vagy üres'}
+              <strong>Runtime dokumentum:</strong> {runtime ? JSON.stringify(runtime) : 'Hiányzik vagy üres'}
             </li>
             <li>
-              <strong>Kezdeti admin fiók:</strong> {account?.displayName || user?.email}
+              <strong>Admin fiók:</strong> {account?.displayName || user?.email}
             </li>
           </ul>
         </StatusCard>
