@@ -11,11 +11,18 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { db } from '../../lib/firebase'
-import { EVENT_SUBCOLLECTIONS, getAccountEventLinkPath, getEventCollectionPath, getEventScopedPath } from '../../lib/firestorePaths'
+import {
+  EVENT_SUBCOLLECTIONS,
+  getAccountEventLinkPath,
+  getCarryoverBalancePath,
+  getEventCollectionPath,
+  getEventScopedPath,
+} from '../../lib/firestorePaths'
 import { createAuditLogWrite } from '../audit/auditService'
 import { AUDIT_TYPES } from '../audit/auditModels'
 import { buildLedgerEntryRecord, LEDGER_ENTRY_TYPES } from '../ledger/ledgerModels'
 import { parseHufInteger } from '../../lib/money'
+import { normalizeShibboleth } from '../../lib/normalize'
 import {
   ATTENDEE_TYPES,
   PERSON_RECORD_STATUSES,
@@ -41,16 +48,21 @@ export function parsePeopleImportText(input) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    .map((row) => splitImportLine(row).map((item) => item.trim()))
 
+  return parsePeopleImportRows(rows)
+}
+
+export function parsePeopleImportRows(rows) {
   const acceptedRows = []
   const rejectedRows = []
 
   rows.forEach((row, index) => {
-    const [nameRaw = '', teamRaw = '', attendeeTypeRaw = ''] = splitImportLine(row).map((item) => item.trim())
+    const [nameRaw = '', teamRaw = '', attendeeTypeRaw = '', shibbolethRaw = ''] = row.map((item) => `${item ?? ''}`.trim())
     const normalizedType = attendeeTypeRaw.toLowerCase()
 
     if (!nameRaw) {
-      rejectedRows.push({ lineNumber: index + 1, reason: 'Missing name', raw: row })
+      rejectedRows.push({ lineNumber: index + 1, reason: 'Missing name', raw: row.join('\t') })
       return
     }
 
@@ -61,7 +73,7 @@ export function parsePeopleImportText(input) {
       rejectedRows.push({
         lineNumber: index + 1,
         reason: 'Status must be organizer or freshman',
-        raw: row,
+        raw: row.join('\t'),
       })
       return
     }
@@ -70,6 +82,8 @@ export function parsePeopleImportText(input) {
       displayName: nameRaw,
       team: teamRaw,
       attendeeType: normalizedType,
+      shibboleth: shibbolethRaw,
+      normalizedShibboleth: normalizeShibboleth(shibbolethRaw),
     })
   })
 
@@ -79,24 +93,62 @@ export function parsePeopleImportText(input) {
 export async function importPeopleFromText({ eventId, actorUid, text }) {
   const { acceptedRows, rejectedRows } = parsePeopleImportText(text)
 
+  return importPeopleRows({ eventId, actorUid, acceptedRows, rejectedRows })
+}
+
+export async function importPeopleFromRows({ eventId, actorUid, rows }) {
+  const { acceptedRows, rejectedRows } = parsePeopleImportRows(rows)
+
+  return importPeopleRows({ eventId, actorUid, acceptedRows, rejectedRows })
+}
+
+async function importPeopleRows({ eventId, actorUid, acceptedRows, rejectedRows }) {
   if (acceptedRows.length === 0) {
     return { importedCount: 0, rejectedRows }
   }
 
   const batch = writeBatch(db)
   const createdPeople = []
+  const carryoverSnapshots = await Promise.all(
+    acceptedRows.map((row) =>
+      row.normalizedShibboleth
+        ? getDoc(doc(db, getCarryoverBalancePath(row.normalizedShibboleth)))
+        : Promise.resolve(null),
+    ),
+  )
+  let carryoverAppliedCount = 0
 
-  acceptedRows.forEach((row) => {
+  acceptedRows.forEach((row, index) => {
     const personRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.people)))
+    const carryover = carryoverSnapshots[index]?.exists() ? carryoverSnapshots[index].data() : null
+    const carryoverBalance = Number.isFinite(carryover?.balance) ? carryover.balance : 0
     const personRecord = buildPersonRecord({
       internalId: buildInternalPersonId(personRef.id),
       displayName: row.displayName,
       team: row.team,
       attendeeType: row.attendeeType,
+      shibboleth: row.shibboleth,
+      balance: carryoverBalance,
     })
 
     batch.set(personRef, personRecord)
-    createdPeople.push({ personId: personRef.id, ...row, internalId: personRecord.internalId })
+    createdPeople.push({ personId: personRef.id, ...row, internalId: personRecord.internalId, carryoverBalance })
+
+    if (carryoverBalance !== 0) {
+      carryoverAppliedCount += 1
+      batch.set(
+        doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.ledgerEntries))),
+        buildLedgerEntryRecord({
+          type: LEDGER_ENTRY_TYPES.carryoverIn,
+          actorUid,
+          personId: personRef.id,
+          amount: carryoverBalance,
+          balanceBefore: 0,
+          balanceAfter: carryoverBalance,
+          reason: `Carry-over from event ${carryover.sourceEventId || 'unknown'}`,
+        }),
+      )
+    }
   })
 
   const auditLogWrite = createAuditLogWrite({
@@ -108,6 +160,8 @@ export async function importPeopleFromText({ eventId, actorUid, text }) {
     details: {
       importedCount: acceptedRows.length,
       rejectedCount: rejectedRows.length,
+      includesShibboleth: acceptedRows.some((row) => row.shibboleth),
+      carryoverAppliedCount,
     },
   })
 
@@ -116,6 +170,7 @@ export async function importPeopleFromText({ eventId, actorUid, text }) {
 
   return {
     importedCount: acceptedRows.length,
+    carryoverAppliedCount,
     rejectedRows,
     createdPeople,
   }
@@ -144,6 +199,7 @@ export async function updatePersonRecord({
   displayName,
   team,
   attendeeType,
+  shibboleth,
 }) {
   const personRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.people, personId))
   const personSnapshot = await getDoc(personRef)
@@ -157,7 +213,7 @@ export async function updatePersonRecord({
 
   batch.set(
     personRef,
-    buildPersonUpdatePatch({ displayName, team, attendeeType }),
+    buildPersonUpdatePatch({ displayName, team, attendeeType, shibboleth }),
     { merge: true },
   )
 
@@ -169,6 +225,7 @@ export async function updatePersonRecord({
         displayName,
         team,
         attendeeType,
+        shibboleth,
       }),
       { merge: true },
     )
@@ -186,6 +243,7 @@ export async function updatePersonRecord({
       displayName,
       team,
       attendeeType,
+      shibboleth,
     },
   })
 

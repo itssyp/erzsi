@@ -12,6 +12,7 @@ setGlobalOptions({ region: 'europe-west1', maxInstances: 10, cors: true })
 const adminAuth = getAuth()
 const db = getFirestore()
 const bootstrapAdminEmails = defineString('BOOTSTRAP_ADMIN_EMAILS')
+const callableOptions = { cors: true }
 
 const QR_CODE_MIN = 10000
 const QR_CODE_MAX_EXCLUSIVE = 100000
@@ -26,6 +27,7 @@ const QR_STATUSES = {
 
 const AUDIT_TYPES = {
   accountLink: 'accountLink',
+  accountSelfJoin: 'accountSelfJoin',
   qrAssignment: 'qrAssignment',
   qrGeneration: 'qrGeneration',
   qrRevocation: 'qrRevocation',
@@ -90,6 +92,26 @@ function normalizePersonId(rawValue) {
   }
 
   return personId
+}
+
+function normalizeShibboleth(rawValue) {
+  const shibboleth = typeof rawValue === 'string' ? rawValue.trim() : ''
+
+  if (!shibboleth) {
+    throw new HttpsError('invalid-argument', 'Shibboleth is required.')
+  }
+
+  return shibboleth
+}
+
+function normalizeShibbolethKey(rawValue) {
+  return `${rawValue ?? ''}`
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
 }
 
 function sanitizeAppBaseUrl(rawValue) {
@@ -184,6 +206,10 @@ function getPersonRef(eventId, personId) {
 
 function getQrCredentialRef(eventId, qrCode) {
   return db.doc(`${getEventPath(eventId)}/qrAssignments/${qrCode}`)
+}
+
+function getCarryoverBalanceRef(normalizedShibboleth) {
+  return db.doc(`carryoverBalances/${normalizedShibboleth}`)
 }
 
 function createAuditLogRef(eventId) {
@@ -798,6 +824,8 @@ export const linkAccountToPersona = onCall(async (request) => {
           displayName: person.displayName || '',
           team: person.team || '',
           attendeeType: person.attendeeType || null,
+          shibboleth: person.shibboleth || '',
+          normalizedShibboleth: normalizeShibbolethKey(person.shibboleth),
           linkedAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         },
@@ -844,5 +872,283 @@ export const linkAccountToPersona = onCall(async (request) => {
   return {
     personId,
     linkedAuthUid,
+  }
+})
+
+export const closeEventAndCarryBalances = onCall(callableOptions, async (request) => {
+  const authContext = ensureAdmin(request)
+  const eventId = normalizeEventId(request.data?.eventId)
+  const eventRef = getEventDocRef(eventId)
+  const runtimeRef = db.doc('system/runtime')
+
+  let summary = {
+    carriedCount: 0,
+    totalBalance: 0,
+  }
+
+  await db.runTransaction(async (transaction) => {
+    const eventSnapshot = await transaction.get(eventRef)
+
+    if (!eventSnapshot.exists) {
+      throw new HttpsError('not-found', 'Event was not found.')
+    }
+
+    const event = eventSnapshot.data()
+
+    if (event.status !== 'active') {
+      throw new HttpsError('failed-precondition', 'Only the active event can be closed.')
+    }
+
+    const peopleSnapshot = await transaction.get(db.collection(`${getEventPath(eventId)}/people`))
+    const activePeople = peopleSnapshot.docs
+      .map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }))
+      .filter((person) => person.recordStatus !== 'deleted')
+
+    const missingShibboleth = []
+    const peopleByShibboleth = new Map()
+
+    activePeople.forEach((person) => {
+      const balance = Number.isFinite(person.balance) ? person.balance : 0
+      const normalizedShibboleth = person.normalizedShibboleth || normalizeShibbolethKey(person.shibboleth)
+
+      if (!normalizedShibboleth) {
+        if (balance !== 0) {
+          missingShibboleth.push({
+            personId: person.id,
+            displayName: person.displayName || '',
+            balance,
+          })
+        }
+        return
+      }
+
+      const existing = peopleByShibboleth.get(normalizedShibboleth) || []
+      existing.push({
+        personId: person.id,
+        displayName: person.displayName || '',
+      })
+      peopleByShibboleth.set(normalizedShibboleth, existing)
+    })
+
+    const duplicateShibboleths = [...peopleByShibboleth.entries()]
+      .filter(([, people]) => people.length > 1)
+      .map(([normalizedShibboleth, people]) => ({ normalizedShibboleth, people }))
+
+    if (missingShibboleth.length || duplicateShibboleths.length) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Event cannot be closed until shibboleth problems are fixed.',
+        { missingShibboleth, duplicateShibboleths },
+      )
+    }
+
+    let carriedCount = 0
+    let totalBalance = 0
+
+    activePeople.forEach((person) => {
+      const normalizedShibboleth = person.normalizedShibboleth || normalizeShibbolethKey(person.shibboleth)
+      if (!normalizedShibboleth) return
+
+      const balance = Number.isFinite(person.balance) ? person.balance : 0
+      carriedCount += 1
+      totalBalance += balance
+
+      transaction.set(
+        getCarryoverBalanceRef(normalizedShibboleth),
+        {
+          shibboleth: person.shibboleth || '',
+          normalizedShibboleth,
+          balance,
+          currency: 'HUF',
+          sourceEventId: eventId,
+          sourcePersonId: person.id,
+          updatedAt: FieldValue.serverTimestamp(),
+          updatedBy: authContext.uid,
+          lastClosedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      )
+    })
+
+    transaction.set(
+      eventRef,
+      {
+        status: 'closed',
+        updatedBy: authContext.uid,
+        updatedAt: FieldValue.serverTimestamp(),
+        closedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )
+
+    transaction.set(
+      runtimeRef,
+      {
+        activeEventId: null,
+        updatedBy: authContext.uid,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )
+
+    transaction.set(
+      createAuditLogRef(eventId),
+      buildAuditLogRecord({
+        type: AUDIT_TYPES.eventChange,
+        actorUid: authContext.uid,
+        summary: `Closed event ${event.name || eventId} and carried ${carriedCount} balances`,
+        targetType: 'event',
+        targetId: eventId,
+        details: {
+          carriedCount,
+          totalBalance,
+        },
+      }),
+    )
+
+    summary = { carriedCount, totalBalance }
+  })
+
+  return summary
+})
+
+export const joinEventByShibboleth = onCall(callableOptions, async (request) => {
+  const authContext = ensureAuthenticated(request)
+  const eventId = normalizeEventId(request.data?.eventId)
+  const submittedShibboleth = typeof request.data?.shibboleth === 'string'
+    ? request.data.shibboleth.trim()
+    : ''
+
+  const accountRef = getAccountRef(authContext.uid)
+  const eventLinkRef = db.doc(`accounts/${authContext.uid}/eventLinks/${eventId}`)
+
+  let joinedPerson = null
+
+  await db.runTransaction(async (transaction) => {
+    const [accountSnapshot, existingLinkSnapshot] = await Promise.all([
+      transaction.get(accountRef),
+      transaction.get(eventLinkRef),
+    ])
+
+    if (!accountSnapshot.exists) {
+      throw new HttpsError('failed-precondition', 'Account record was not found.')
+    }
+
+    const account = accountSnapshot.data()
+    const shibboleth = normalizeShibboleth(submittedShibboleth || account.shibboleth)
+    const normalizedShibboleth = normalizeShibbolethKey(shibboleth)
+
+    if (existingLinkSnapshot.exists) {
+      const existingLink = existingLinkSnapshot.data()
+
+      if (existingLink.personId) {
+        joinedPerson = {
+          id: existingLink.personId,
+          displayName: existingLink.displayName || '',
+          alreadyLinked: true,
+        }
+        return
+      }
+    }
+
+    let matchingPeopleSnapshot = await transaction.get(
+      db.collection(`${getEventPath(eventId)}/people`)
+        .where('normalizedShibboleth', '==', normalizedShibboleth),
+    )
+
+    if (matchingPeopleSnapshot.empty) {
+      matchingPeopleSnapshot = await transaction.get(
+        db.collection(`${getEventPath(eventId)}/people`)
+          .where('shibboleth', '==', shibboleth),
+      )
+    }
+
+    const matchingPeople = matchingPeopleSnapshot.docs
+      .map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }))
+      .filter((person) => person.recordStatus !== 'deleted')
+
+    if (matchingPeople.length === 0) {
+      throw new HttpsError('not-found', 'No persona with this shibboleth exists in the active event. Find an organizer.')
+    }
+
+    if (matchingPeople.length > 1) {
+      throw new HttpsError('failed-precondition', 'More than one persona uses this shibboleth. Find an organizer.')
+    }
+
+    const person = matchingPeople[0]
+
+    if (person.linkedAuthUid && person.linkedAuthUid !== authContext.uid) {
+      throw new HttpsError('failed-precondition', 'This persona is already linked to another account. Find an organizer.')
+    }
+
+    transaction.set(
+      accountRef,
+      {
+        shibboleth,
+        normalizedShibboleth,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )
+
+    transaction.set(
+      eventLinkRef,
+      {
+        eventId,
+        personId: person.id,
+        linkedPersonaId: person.id,
+        linkedAuthUid: authContext.uid,
+        linkedBy: authContext.uid,
+        displayName: person.displayName || '',
+        team: person.team || '',
+        attendeeType: person.attendeeType || null,
+        shibboleth: person.shibboleth || shibboleth,
+        normalizedShibboleth,
+        linkedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+    )
+
+    transaction.set(getPersonRef(eventId, person.id), buildPersonLinkPatch({ linkedAuthUid: authContext.uid }), { merge: true })
+
+    if (person.assignedQrId || person.qrCodeId) {
+      const qrCode = person.assignedQrId || person.qrCodeId
+      transaction.set(
+        getQrCredentialRef(eventId, qrCode),
+        {
+          assignedAccountId: authContext.uid,
+          linkedAuthUid: authContext.uid,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true },
+      )
+    }
+
+    transaction.set(
+      createAuditLogRef(eventId),
+      buildAuditLogRecord({
+        type: AUDIT_TYPES.accountSelfJoin,
+        actorUid: authContext.uid,
+        summary: `Account ${account.email || authContext.uid} joined persona ${person.displayName || person.id} by shibboleth`,
+        targetType: 'person',
+        targetId: person.id,
+        personId: person.id,
+        details: {
+          linkedAuthUid: authContext.uid,
+          shibboleth,
+        },
+      }),
+    )
+
+    joinedPerson = {
+      id: person.id,
+      displayName: person.displayName || '',
+      internalId: person.internalId || '',
+    }
+  })
+
+  return {
+    joined: Boolean(joinedPerson),
+    person: joinedPerson,
   }
 })

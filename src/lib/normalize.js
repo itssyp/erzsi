@@ -16,3 +16,13 @@ export function normalizeCode(value) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 48)
 }
+
+export function normalizeShibboleth(value) {
+  return `${value ?? ''}`
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}

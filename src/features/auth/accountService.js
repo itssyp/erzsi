@@ -63,6 +63,7 @@ export async function linkRegisteredUserToPerson({
   displayName,
   team,
   attendeeType,
+  shibboleth,
 }) {
   await linkAccountToPersonaCallable({
     eventId,
@@ -72,5 +73,6 @@ export async function linkRegisteredUserToPerson({
     displayName,
     team,
     attendeeType,
+    shibboleth,
   })
 }

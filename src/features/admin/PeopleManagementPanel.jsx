@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
+import * as XLSX from 'xlsx'
 import { StatusCard } from '../../components/StatusCard'
 import { formatHuf, parseHufInteger } from '../../lib/money'
 import { ATTENDEE_TYPES, PERSON_RECORD_STATUSES } from '../people/personModels'
 import {
   adjustPersonBalance,
   deletePersonRecord,
+  importPeopleFromRows,
   importPeopleFromText,
   restorePersonRecord,
   subscribeToPeople,
@@ -27,6 +29,7 @@ const emptyEditState = {
   displayName: '',
   team: '',
   attendeeType: ATTENDEE_TYPES.freshman,
+  shibboleth: '',
 }
 
 function CameraIcon() {
@@ -45,6 +48,7 @@ function buildSelectedPersonState(person) {
     displayName: person.displayName,
     team: person.team || '',
     attendeeType: person.attendeeType,
+    shibboleth: person.shibboleth || '',
   }
 }
 
@@ -75,6 +79,53 @@ function normalizeFunctionError(error, fallback) {
 }
 
 // ── Completeness pill ──────────────────────────────────────────────────────
+function normalizeImportHeader(value) {
+  return `${value ?? ''}`
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+}
+
+function resolveExcelColumnIndexes(headerRow) {
+  const normalizedHeaders = headerRow.map(normalizeImportHeader)
+  const aliases = {
+    displayName: ['name', 'displayname', 'nev', 'név'],
+    team: ['team', 'csapat'],
+    attendeeType: ['type', 'attendeetype', 'status', 'tipus', 'típus'],
+    shibboleth: ['shibboleth', 'shib'],
+  }
+
+  const indexes = Object.fromEntries(
+    Object.entries(aliases).map(([field, fieldAliases]) => [
+      field,
+      normalizedHeaders.findIndex((header) => fieldAliases.includes(header)),
+    ]),
+  )
+
+  return indexes.displayName >= 0 ? indexes : null
+}
+
+function parsePersonaExcelRows(workbook) {
+  const firstSheetName = workbook.SheetNames[0]
+  const sheet = workbook.Sheets[firstSheetName]
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' })
+  const nonEmptyRows = rawRows.filter((row) => row.some((cell) => `${cell ?? ''}`.trim()))
+  if (!nonEmptyRows.length) return []
+
+  const headerIndexes = resolveExcelColumnIndexes(nonEmptyRows[0])
+
+  if (!headerIndexes) {
+    return nonEmptyRows.map((row) => [row[0], row[1], row[2], row[3]])
+  }
+
+  return nonEmptyRows.slice(1).map((row) => [
+    row[headerIndexes.displayName],
+    headerIndexes.team >= 0 ? row[headerIndexes.team] : '',
+    headerIndexes.attendeeType >= 0 ? row[headerIndexes.attendeeType] : '',
+    headerIndexes.shibboleth >= 0 ? row[headerIndexes.shibboleth] : '',
+  ])
+}
+
 const COMPLETENESS_LABELS = { complete: 'Complete', partial: 'Partial', incomplete: 'Incomplete' }
 const COMPLETENESS_COLORS = {
   complete:   { background: 'color-mix(in srgb, var(--success) 12%, transparent)', color: '#15803d', border: '#86efac' },
@@ -137,6 +188,15 @@ function PersonProfileTab({ selectedPerson, editState, setEditState, pending, on
           <option value={ATTENDEE_TYPES.freshman}>Freshman</option>
           <option value={ATTENDEE_TYPES.organizer}>Organizer</option>
         </select>
+      </div>
+      <div className="field">
+        <label htmlFor="personShibboleth">Shibboleth</label>
+        <input
+          id="personShibboleth"
+          value={editState.shibboleth}
+          onChange={(e) => setEditState((s) => ({ ...s, shibboleth: e.target.value }))}
+          placeholder="External identifier"
+        />
       </div>
       <div className="button-row">
         <button type="button" className="primary-button" onClick={onSave} disabled={pending}>
@@ -212,7 +272,7 @@ function PersonAccountTab({ selectedPerson, linkedAccount, availableAccounts, ac
               >
                 <span>
                   <strong>{account.displayName || account.email}</strong>
-                  <small>{account.email}</small>
+                  <small>{account.email}{account.shibboleth ? ` · ${account.shibboleth}` : ''}</small>
                 </span>
               </button>
             ))}
@@ -590,7 +650,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
       const isLinkedElsewhere = linkedAccountIds.has(account.uid) && account.uid !== selectedLinkedAccountId
       if (isLinkedElsewhere) return false
       if (!search) return true
-      const haystack = `${account.displayName || ''} ${account.email || ''}`.toLowerCase()
+      const haystack = `${account.displayName || ''} ${account.email || ''} ${account.shibboleth || ''}`.toLowerCase()
       return haystack.includes(search)
     }).slice(0, 8)
   }, [accountSearch, linkedAccountIds, selectedPerson, userAccounts])
@@ -690,8 +750,33 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
       )
       setImportFeedback(result)
       setImportText('')
-      setStatusMessage(`Imported ${result.importedCount} persona record${result.importedCount === 1 ? '' : 's'}.`)
+      setStatusMessage(`Imported ${result.importedCount} persona record${result.importedCount === 1 ? '' : 's'}. Carry-over applied to ${result.carryoverAppliedCount || 0}.`)
     } catch { /* handled */ }
+  }
+
+  async function handleExcelImport(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const rows = parsePersonaExcelRows(workbook)
+
+      if (!rows.length) {
+        setErrorMessage('Excel import failed: the first sheet has no rows.')
+        return
+      }
+
+      const result = await runAction(
+        () => importPeopleFromRows({ eventId, actorUid, rows }),
+        'Excel import failed.',
+      )
+      setImportFeedback(result)
+      setStatusMessage(`Imported ${result.importedCount} persona record${result.importedCount === 1 ? '' : 's'} from Excel. Carry-over applied to ${result.carryoverAppliedCount || 0}.`)
+    } catch (error) {
+      setErrorMessage(error?.message || 'Excel import failed.')
+    }
   }
 
   async function handleSavePerson() {
@@ -740,6 +825,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
             displayName: selectedPerson.displayName,
             team: selectedPerson.team,
             attendeeType: selectedPerson.attendeeType,
+            shibboleth: selectedPerson.shibboleth || '',
           }),
         'Linking the account failed.',
       )
@@ -893,9 +979,22 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
             <section className="panel">
               <h4 className="card-title">Import personas</h4>
               <p className="helper-text">
-                One attendee per line: <strong>name, team, type</strong> (tab, semicolon, or comma).
+                One attendee per line: <strong>name, team, type, shibboleth</strong> (tab, semicolon, or comma).
               </p>
               <form className="form-grid" onSubmit={handleImport} style={{ marginTop: '12px' }}>
+                <div className="field">
+                  <label htmlFor="peopleImportExcel">Excel file</label>
+                  <input
+                    id="peopleImportExcel"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    onChange={handleExcelImport}
+                    disabled={pending}
+                  />
+                  <p className="helper-text">
+                    Uses the first sheet. Header row can be name, team, type, shibboleth.
+                  </p>
+                </div>
                 <div className="field">
                   <label htmlFor="peopleImport">Paste rows</label>
                   <textarea
@@ -903,7 +1002,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                     className="text-area"
                     value={importText}
                     onChange={(e) => setImportText(e.target.value)}
-                    placeholder={'John Doe\tRed\tfreshman'}
+                    placeholder={'John Doe\tRed\tfreshman\tSHIB-123'}
                     rows={10}
                   />
                 </div>
@@ -916,7 +1015,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
               {importFeedback && (
                 <div className="stack-block" style={{ gap: '8px', marginTop: '12px' }}>
                   <p className="helper-text">
-                    Imported {importFeedback.importedCount} rows. Rejected {importFeedback.rejectedRows.length}.
+                    Imported {importFeedback.importedCount} rows. Carry-over applied to {importFeedback.carryoverAppliedCount || 0}. Rejected {importFeedback.rejectedRows.length}.
                   </p>
                   {importFeedback.rejectedRows.length > 0 && (
                     <ul className="detail-list">
@@ -966,6 +1065,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                           <small>
                             {person.internalId}
                             {person.team ? ` · ${person.team}` : ''}
+                            {person.shibboleth ? ` · ${person.shibboleth}` : ''}
                           </small>
                         </span>
                       </span>
@@ -1011,7 +1111,8 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '1rem' }}>{selectedPerson.displayName}</div>
                         <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
-                          {selectedPerson.team || 'No team'} · {selectedPerson.attendeeType} · {formatHuf(selectedPerson.balance || 0)}
+                          {selectedPerson.team || 'No team'} · {selectedPerson.attendeeType}
+                          {selectedPerson.shibboleth ? ` · ${selectedPerson.shibboleth}` : ''} · {formatHuf(selectedPerson.balance || 0)}
                         </div>
                       </div>
                     </div>

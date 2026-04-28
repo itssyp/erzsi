@@ -80,10 +80,19 @@ service cloud.firestore {
         && request.resource.data.email == request.auth.token.email;
     }
 
+    function validOwnAccountUpdate(uid) {
+      return isOwnAccount(uid)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status;
+    }
+
     match /accounts/{uid} {
       allow read: if isOwnAccount(uid) || isStaffLike();
       allow create: if isOwnAccount(uid) && validUserAccountCreate(uid);
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin() || validOwnAccountUpdate(uid);
+      allow delete: if isAdmin();
 
       match /eventLinks/{eventId} {
         allow read: if isOwnAccount(uid) || isAdmin();
@@ -93,6 +102,11 @@ service cloud.firestore {
 
     match /system/runtime {
       allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /carryoverBalances/{normalizedShibboleth} {
+      allow read: if isAdmin();
       allow write: if isAdmin();
     }
 

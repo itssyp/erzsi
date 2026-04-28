@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { StatusCard } from '../../components/StatusCard'
 import { LoadingScreen } from '../../components/LoadingScreen'
 import { formatHuf } from '../../lib/money'
@@ -5,6 +6,7 @@ import { useAuth } from '../auth/useAuth'
 import { useActiveEvent } from '../events/useActiveEvent'
 import { QrCodeCard } from '../user/QrCodeCard'
 import { useUserDashboardData } from '../user/useUserDashboardData'
+import { joinEventByShibboleth } from '../user/userService'
 import { TabShell } from '../../components/TabShell'
 import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
 import { isFoodCategory } from '../products/productModels'
@@ -61,17 +63,59 @@ function formatOrderTimestamp(value) {
   return value.toDate().toLocaleString('hu-HU')
 }
 
+function getJoinErrorMessage(error) {
+  switch (error?.code) {
+    case 'functions/not-found':
+    case 'functions/failed-precondition':
+    case 'functions/invalid-argument':
+      return error.message || 'Nem sikerült csatlakozni az eseményhez. Keress egy szervezőt.'
+    case 'functions/unauthenticated':
+      return 'Jelentkezz be újra a csatlakozáshoz.'
+    default:
+      return error?.message || 'Nem sikerült csatlakozni az eseményhez. Keress egy szervezőt.'
+  }
+}
+
 export function UserDashboardPage() {
   const { account, user } = useAuth()
   const { activeEvent, activeEventId } = useActiveEvent()
+  const [joinShibboleth, setJoinShibboleth] = useState('')
+  const [joinPending, setJoinPending] = useState(false)
+  const [joinError, setJoinError] = useState('')
+  const [joinStatus, setJoinStatus] = useState('')
   const { loading, person, orders, activeFoodOrder, hasLinkedPerson, error } = useUserDashboardData({
     uid: user?.uid,
     eventId: activeEventId,
   })
 
+  useEffect(() => {
+    setJoinShibboleth(account?.shibboleth || '')
+  }, [account?.shibboleth])
+
+  async function handleJoinEvent(event) {
+    event.preventDefault()
+    setJoinPending(true)
+    setJoinError('')
+    setJoinStatus('')
+
+    try {
+      await joinEventByShibboleth({
+        eventId: activeEventId,
+        shibboleth: joinShibboleth,
+      })
+      setJoinStatus('Sikeres csatlakozás. A profilod betöltése folyamatban van.')
+    } catch (joinError) {
+      setJoinError(getJoinErrorMessage(joinError))
+    } finally {
+      setJoinPending(false)
+    }
+  }
+
   if (loading) {
     return <LoadingScreen label="Eseményprofil betöltése" />
   }
+
+  const historyTotalSpent = orders.reduce((sum, order) => sum + (order.totalAmount || 0), 0)
 
   const tabs = hasLinkedPerson ? [
     {
@@ -87,6 +131,7 @@ export function UserDashboardPage() {
               <li><strong>Név</strong> <span>{person.displayName}</span></li>
               <li><strong>Csapat</strong> <span>{person.team || '-'}</span></li>
               <li><strong>Típus</strong> <span style={{ textTransform: 'capitalize' }}>{person.attendeeType}</span></li>
+              <li><strong>Shibboleth</strong> <span>{person.shibboleth || '-'}</span></li>
               <li><strong>Esemény</strong> <span>{activeEvent?.name || activeEventId}</span></li>
             </ul>
           </section>
@@ -141,12 +186,17 @@ export function UserDashboardPage() {
       label: 'Előzmények',
       component: (
         <section className="panel user-flat-section">
-          <h3 className="card-title">Korábbi rendelések</h3>
+          <div className="split-header user-history-summary">
+            <h3 className="card-title">Korábbi rendelések</h3>
+            <div className="user-history-total">
+              <span>Összes költés</span>
+              <strong>{formatHuf(historyTotalSpent)}</strong>
+            </div>
+          </div>
           <div className="user-history-list">
             {orders.map((order) => (
               <article key={order.id} className="receipt-container user-history-receipt">
                 <div className="receipt-header user-history-receipt-header">
-                  <div style={{ fontWeight: 800, fontSize: '1rem' }}>{formatHuf(order.totalAmount)}</div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '2px' }}>
                     {formatOrderTimestamp(order.createdAt)}
                   </div>
@@ -197,12 +247,38 @@ export function UserDashboardPage() {
 
       {!hasLinkedPerson ? (
         <StatusCard
-          title="Admin összekapcsolásra vár"
+          title="Csatlakozás az eseményhez"
           tone="warning"
-          body="A fiókod már létezik, de még nincs összekapcsolva egy résztvevői profillal az aktív eseményben. Kérj meg egy staff tagot vagy szervezőt a kapcsolás elvégzésére."
+          body="A fiókod még nincs összekapcsolva résztvevői profillal az aktív eseményben. Add meg a shibboleth azonosítódat, és ha találunk egyező profilt, automatikusan csatlakozhatsz."
         >
+          {joinError ? <div className="error-banner" style={{ marginTop: '12px' }}>{joinError}</div> : null}
+          {joinStatus ? <div className="status-inline" style={{ marginTop: '12px' }}>{joinStatus}</div> : null}
+          <form className="form-grid" onSubmit={handleJoinEvent} style={{ marginTop: '12px' }}>
+            <div className="field">
+              <label htmlFor="joinShibboleth">Shibboleth</label>
+              <input
+                id="joinShibboleth"
+                value={joinShibboleth}
+                onChange={(event) => setJoinShibboleth(event.target.value)}
+                placeholder="Shibboleth azonosító"
+                autoComplete="off"
+                required
+              />
+            </div>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={joinPending || !activeEventId || !joinShibboleth.trim()}
+            >
+              {joinPending ? 'Csatlakozás...' : 'Csatlakozás'}
+            </button>
+          </form>
+          <p className="helper-text" style={{ marginTop: '12px' }}>
+            Ha nincs egyező shibboleth az aktív eseményben, vagy a profil már másik fiókhoz tartozik, keress egy szervezőt.
+          </p>
           <ul className="detail-list" style={{ marginTop: '12px' }}>
             <li><strong>Bejelentkezve mint</strong> <span>{account?.email || user?.email || '-'}</span></li>
+            <li><strong>Fiók shibboleth</strong> <span>{account?.shibboleth || '-'}</span></li>
             <li><strong>Aktív esemény</strong> <span>{activeEvent?.name || activeEventId || 'Nincs aktív esemény'}</span></li>
           </ul>
         </StatusCard>

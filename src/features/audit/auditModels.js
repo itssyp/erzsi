@@ -19,6 +19,7 @@ export const AUDIT_TYPES = {
   refund: 'refund',
   kitchenStatusChange: 'kitchenStatusChange',
   drsReturn: 'drsReturn',
+  accountSelfJoin: 'accountSelfJoin',
 }
 
 export function buildAuditLogRecord({

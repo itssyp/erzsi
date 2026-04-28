@@ -9,7 +9,8 @@ import {
   setDoc,
   writeBatch,
 } from 'firebase/firestore'
-import { db } from '../../lib/firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '../../lib/firebase'
 import {
   EVENTS_COLLECTION,
   EVENT_SUBCOLLECTIONS,
@@ -24,12 +25,13 @@ import { buildModifierTemplateRecord } from '../modifiers/modifierTemplateModels
 import { buildProductRecord } from '../products/productModels'
 import {
   buildEventActivationPatch,
-  buildEventClosedPatch,
   buildEventRecord,
   buildKitchenStatusPatch,
   buildRuntimeRecord,
   deriveEventCode,
 } from './eventModels'
+
+const closeEventAndCarryBalancesCallable = httpsCallable(functions, 'closeEventAndCarryBalances')
 
 export function subscribeToRuntime(onNext, onError) {
   return onSnapshot(
@@ -121,6 +123,10 @@ export async function createEvent({
   actorUid,
   currentActiveEventId,
 }) {
+  if (activateNow && currentActiveEventId) {
+    throw new Error('Close the active event before creating and activating a new event.')
+  }
+
   const eventRef = doc(collection(db, EVENTS_COLLECTION))
   const batch = writeBatch(db)
   const eventRecord = buildEventRecord({
@@ -139,14 +145,6 @@ export async function createEvent({
       buildRuntimeRecord({ activeEventId: eventRef.id, actorUid }),
       { merge: true },
     )
-
-    if (currentActiveEventId) {
-      batch.set(
-        doc(db, getEventPath(currentActiveEventId)),
-        buildEventClosedPatch({ actorUid }),
-        { merge: true },
-      )
-    }
   }
 
   const auditLogWrite = createAuditLogWrite({
@@ -179,6 +177,10 @@ export async function createEvent({
 }
 
 export async function activateEvent({ eventId, actorUid, currentActiveEventId }) {
+  if (currentActiveEventId && currentActiveEventId !== eventId) {
+    throw new Error('Close the active event before activating another event.')
+  }
+
   const batch = writeBatch(db)
 
   batch.set(
@@ -191,14 +193,6 @@ export async function activateEvent({ eventId, actorUid, currentActiveEventId })
     buildRuntimeRecord({ activeEventId: eventId, actorUid }),
     { merge: true },
   )
-
-  if (currentActiveEventId && currentActiveEventId !== eventId) {
-    batch.set(
-      doc(db, getEventPath(currentActiveEventId)),
-      buildEventClosedPatch({ actorUid }),
-      { merge: true },
-    )
-  }
 
   const auditLogWrite = createAuditLogWrite({
     eventId,
@@ -214,6 +208,12 @@ export async function activateEvent({ eventId, actorUid, currentActiveEventId })
 
   batch.set(auditLogWrite.ref, auditLogWrite.data)
   await batch.commit()
+}
+
+export async function closeEventAndCarryBalances({ eventId }) {
+  const result = await closeEventAndCarryBalancesCallable({ eventId })
+
+  return result.data
 }
 
 export async function ensureRuntimeDocument(actorUid) {

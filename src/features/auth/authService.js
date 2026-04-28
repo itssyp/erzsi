@@ -5,8 +5,12 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth'
+import { doc, setDoc } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
-import { auth, functions } from '../../lib/firebase'
+import { auth, db, functions } from '../../lib/firebase'
+import { getAccountPath } from '../../lib/firestorePaths'
+import { ROLES } from '../../lib/roles'
+import { buildAccountRecord } from './accountModels'
 
 const bootstrapAdminSessionCallable = httpsCallable(functions, 'bootstrapAdminSession')
 const createPrivilegedAccountCallable = httpsCallable(functions, 'createPrivilegedAccount')
@@ -24,12 +28,25 @@ export async function signInWithPassword({ email, password }) {
   return signInWithEmailAndPassword(auth, email.trim(), password)
 }
 
-export async function registerUser({ displayName, email, password }) {
+export async function registerUser({ displayName, email, password, shibboleth }) {
   const credential = await createUserWithEmailAndPassword(auth, email.trim(), password)
 
   if (displayName?.trim()) {
     await updateProfile(credential.user, { displayName: displayName.trim() })
   }
+
+  await setDoc(
+    doc(db, getAccountPath(credential.user.uid)),
+    buildAccountRecord(
+      {
+        ...credential.user,
+        displayName: displayName?.trim() || credential.user.displayName,
+      },
+      ROLES.user,
+      { shibboleth },
+    ),
+    { merge: true },
+  )
 
   return credential
 }

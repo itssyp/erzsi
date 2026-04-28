@@ -27,6 +27,7 @@ export function LoginPage() {
     email: '',
     password: '',
     displayName: '',
+    shibboleth: '',
   })
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -63,11 +64,11 @@ export function LoginPage() {
           <img className="login-logo" src={LOGO_SRC} alt="Kasszas Erzsi logo" />
         </div>
 
-        <div className="login-hero-copy">
+        {/* <div className="login-hero-copy">
           <span className="eyebrow">Kasszas Erzsi</span>
           <h1 className="hero-title">Egyszerű tábori kasszarendszer.</h1>
           <p>Jelentkezz be a rendelések, egyenlegek és a konyhai folyamatok kezeléséhez.</p>
-        </div>
+        </div> */}
 
         <div className="login-actions">
           <InstallPWAButton />
@@ -106,6 +107,7 @@ export function LoginPage() {
 
         <form className="form-grid" onSubmit={handleSubmit}>
           {mode === 'register' ? (
+            <>
             <div className="field">
               <label htmlFor="displayName">Neved</label>
               <input
@@ -117,6 +119,19 @@ export function LoginPage() {
                 required
               />
             </div>
+            <div className="field">
+              <label htmlFor="shibboleth">Shibboleth</label>
+              <input
+                id="shibboleth"
+                name="shibboleth"
+                value={formState.shibboleth}
+                onChange={updateField}
+                placeholder="Shibboleth azonosito"
+                autoComplete="off"
+                required
+              />
+            </div>
+            </>
           ) : null}
 
           <div className="field">

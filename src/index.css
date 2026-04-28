@@ -786,15 +786,47 @@ h1, h2, h3, h4, h5, h6 {
 
 .user-history-list {
   margin-top: 6px;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 14px;
   align-items: flex-start;
 }
 
+.user-history-summary {
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.user-history-summary .card-title {
+  margin-bottom: 0;
+}
+
+.user-history-total {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-family: 'Courier New', Courier, monospace;
+  text-align: right;
+}
+
+.user-history-total span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.user-history-total strong {
+  color: var(--primary);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
 .user-history-receipt {
-  flex: 1 1 320px;
-  width: min(100%, 380px);
+  width: 100%;
+  min-width: 0;
   min-height: auto;
   background: color-mix(in srgb, var(--surface) 72%, white);
 }
@@ -803,6 +835,38 @@ h1, h2, h3, h4, h5, h6 {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow-wrap: anywhere;
+}
+
+.user-history-receipt .receipt-body {
+  gap: 6px;
+}
+
+.user-history-receipt .receipt-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: start;
+}
+
+.user-history-receipt .receipt-item-name {
+  min-width: 0;
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.user-history-receipt .receipt-dots {
+  display: none;
+}
+
+.user-history-receipt .receipt-line-price {
+  min-width: max-content;
+}
+
+.user-history-list > .helper-text {
+  grid-column: 1 / -1;
 }
 
 .user-history-meta {
@@ -2227,6 +2291,59 @@ textarea:disabled {
   gap: 12px;
 }
 
+.audit-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.audit-search-field {
+  flex: 1 1 320px;
+  max-width: 560px;
+}
+
+.audit-result-count {
+  margin-bottom: 9px;
+  white-space: nowrap;
+}
+
+.audit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.audit-meta-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.audit-meta-item strong {
+  color: var(--text);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.audit-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
 /* ── Balance display ── */
 .balance-value {
   font-size: 2.4rem;
@@ -2304,18 +2421,19 @@ textarea:disabled {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 28px;
+  align-items: center;
+  gap: 32px;
   overflow-y: auto;
 }
 
 .login-logo-shell {
-  width: min(100%, 420px);
+  width: min(78%, 620px);
 }
 
 .login-logo {
   display: block;
   width: 100%;
-  max-width: 320px;
+  max-width: 560px;
   height: auto;
   margin: 0 auto;
   object-fit: contain;
@@ -2369,6 +2487,41 @@ textarea:disabled {
 .login-actions {
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: min(100%, 560px);
+}
+
+.pwa-banner {
+  width: 100%;
+  max-width: 520px;
+  padding: 12px 14px;
+  border: 1.5px solid rgba(198, 19, 44, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.pwa-banner strong {
+  color: var(--text);
+}
+
+.pwa-install-stack {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.pwa-helper-text {
+  max-width: 420px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  text-align: center;
 }
 
 .login-panel {
@@ -3179,6 +3332,21 @@ textarea:disabled {
     flex-wrap: wrap;
   }
 
+  .audit-toolbar,
+  .audit-pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .audit-search-field {
+    max-width: none;
+  }
+
+  .audit-result-count {
+    margin-bottom: 0;
+    white-space: normal;
+  }
+
   .detail-list li {
     align-items: flex-start;
     flex-direction: column;
@@ -3419,7 +3587,7 @@ textarea:disabled {
     min-height: auto;
     align-items: center;
     text-align: center;
-    gap: 18px;
+    gap: 16px;
     overflow: visible;
   }
 
@@ -3434,11 +3602,11 @@ textarea:disabled {
   }
 
   .login-logo-shell {
-    width: min(100%, 300px);
+    width: min(72vw, 360px);
   }
 
   .login-logo {
-    max-width: 240px;
+    max-width: 340px;
   }
 
   .login-hero-copy {
@@ -3459,6 +3627,10 @@ textarea:disabled {
     justify-content: center;
   }
 
+  .pwa-banner {
+    max-width: 420px;
+  }
+
   .two-column-grid {
     grid-template-columns: 1fr;
   }
@@ -3477,11 +3649,11 @@ textarea:disabled {
   }
 
   .login-logo-shell {
-    width: min(100%, 220px);
+    width: min(74vw, 300px);
   }
 
   .login-logo {
-    max-width: 180px;
+    max-width: 280px;
   }
 
   .login-hero-copy {
@@ -3500,6 +3672,11 @@ textarea:disabled {
   .login-hero .muted {
     font-size: 0.9rem;
     line-height: 1.45;
+  }
+
+  .pwa-banner {
+    padding: 10px 12px;
+    font-size: 0.84rem;
   }
 
   .login-panel {

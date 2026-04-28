@@ -1,6 +1,9 @@
 import { doc, onSnapshot } from 'firebase/firestore'
-import { db } from '../../lib/firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '../../lib/firebase'
 import { getAccountEventLinkPath, getEventScopedPath, EVENT_SUBCOLLECTIONS } from '../../lib/firestorePaths'
+
+const joinEventByShibbolethCallable = httpsCallable(functions, 'joinEventByShibboleth')
 
 export function subscribeToActiveEventLink(uid, eventId, onNext, onError) {
   return onSnapshot(
@@ -20,4 +23,10 @@ export function subscribeToLinkedPerson(eventId, personId, onNext, onError) {
     },
     onError,
   )
+}
+
+export async function joinEventByShibboleth({ eventId, shibboleth }) {
+  const result = await joinEventByShibbolethCallable({ eventId, shibboleth })
+
+  return result.data
 }

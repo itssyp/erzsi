@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import { StatusCard } from '../../components/StatusCard'
 import {
   activateEvent,
+  closeEventAndCarryBalances,
   createEvent,
   ensureRuntimeDocument,
   subscribeToEventsList,
 } from '../events/eventService'
+import { formatHuf } from '../../lib/money'
 
 const initialFormState = {
   name: '',
@@ -27,6 +29,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
   const [loadingEvents, setLoadingEvents] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [statusMessage, setStatusMessage] = useState('')
 
   useEffect(() => {
     if (!actorUid) return () => {}
@@ -58,6 +61,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
     event.preventDefault()
     setSubmitting(true)
     setErrorMessage('')
+    setStatusMessage('')
 
     try {
       await createEvent({
@@ -76,6 +80,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
   async function handleActivateEvent(eventId) {
     setSubmitting(true)
     setErrorMessage('')
+    setStatusMessage('')
 
     try {
       await activateEvent({
@@ -90,6 +95,45 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
     }
   }
 
+  function formatCloseError(error) {
+    const details = error?.details
+    if (!details?.missingShibboleth?.length && !details?.duplicateShibboleths?.length) {
+      return error?.message || 'Az esemény lezárása sikertelen volt.'
+    }
+
+    const missing = details.missingShibboleth?.length
+      ? `Hiányzó shibboleth nem nulla egyenleggel: ${details.missingShibboleth.map((item) => item.displayName || item.personId).join(', ')}.`
+      : ''
+    const duplicates = details.duplicateShibboleths?.length
+      ? `Duplikált shibboleth: ${details.duplicateShibboleths.map((item) => item.normalizedShibboleth).join(', ')}.`
+      : ''
+
+    return [error.message, missing, duplicates].filter(Boolean).join(' ')
+  }
+
+  async function handleCloseEvent() {
+    if (!activeEventId) return
+
+    const confirmed = window.confirm(
+      'Biztosan lezárod az aktív eseményt? A résztvevők aktuális egyenlege shibboleth alapján átkerül a következő eseményhez használható globális carry-over tárolóba, és nem lesz aktív esemény.',
+    )
+
+    if (!confirmed) return
+
+    setSubmitting(true)
+    setErrorMessage('')
+    setStatusMessage('')
+
+    try {
+      const result = await closeEventAndCarryBalances({ eventId: activeEventId })
+      setStatusMessage(`Esemény lezárva. Átvitt egyenlegek: ${result.carriedCount}; összesen: ${formatHuf(result.totalBalance || 0)}.`)
+    } catch (error) {
+      setErrorMessage(formatCloseError(error))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   return (
     <div className="two-column-grid">
       <section className="panel">
@@ -98,6 +142,14 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
           Az új események alapból üresen indulnak. Ha a következő tábor újrahasználná az előző katalógust, létrehozás közben másold át a termékeket és módosítókat egy korábbi eseményből.
         </p>
         {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
+        {statusMessage ? <div className="status-inline">{statusMessage}</div> : null}
+        {activeEventId ? (
+          <div className="button-row" style={{ marginBottom: '12px' }}>
+            <button type="button" className="danger-button" onClick={handleCloseEvent} disabled={submitting}>
+              {submitting ? 'Lezárás...' : 'Aktív esemény lezárása'}
+            </button>
+          </div>
+        ) : null}
         <form className="form-grid" onSubmit={handleCreateEvent}>
           <div className="field">
             <label htmlFor="eventName">Esemény neve</label>
@@ -207,10 +259,10 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={submitting || activeEventId === event.id}
+                  disabled={submitting || Boolean(activeEventId)}
                   onClick={() => handleActivateEvent(event.id)}
                 >
-                  {activeEventId === event.id ? 'Jelenleg aktív' : 'Aktívvá tesz'}
+                  {activeEventId === event.id ? 'Jelenleg aktív' : activeEventId ? 'Előbb zárd le az aktív eseményt' : 'Aktívvá tesz'}
                 </button>
               </div>
             </article>

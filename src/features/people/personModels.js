@@ -1,5 +1,5 @@
 import { serverTimestamp } from 'firebase/firestore'
-import { normalizeSearchText } from '../../lib/normalize'
+import { normalizeSearchText, normalizeShibboleth } from '../../lib/normalize'
 
 export const ATTENDEE_TYPES = {
   organizer: 'organizer',
@@ -18,6 +18,8 @@ export const PERSON_RECORD_STATUSES = {
  * @property {string} normalizedName
  * @property {string} team
  * @property {'organizer' | 'freshman'} attendeeType
+ * @property {string} shibboleth
+ * @property {string} normalizedShibboleth
  * @property {string | null} linkedAuthUid
  * @property {string | null} linkedAccountId
  * @property {string | null} qrCodeId
@@ -34,6 +36,8 @@ export function buildPersonRecord({
   displayName,
   team = '',
   attendeeType,
+  shibboleth = '',
+  balance = 0,
 }) {
   return {
     internalId,
@@ -41,12 +45,14 @@ export function buildPersonRecord({
     normalizedName: normalizeSearchText(displayName),
     team: team.trim(),
     attendeeType,
+    shibboleth: shibboleth.trim(),
+    normalizedShibboleth: normalizeShibboleth(shibboleth),
     linkedAuthUid: null,
     linkedAccountId: null,
     qrCodeId: null,
     assignedQrId: null,
     assignedQrLink: null,
-    balance: 0,
+    balance,
     recordStatus: PERSON_RECORD_STATUSES.active,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -70,12 +76,14 @@ export function buildPersonQrPatch({ qrCodeId, qrLink = null }) {
   }
 }
 
-export function buildPersonUpdatePatch({ displayName, team, attendeeType }) {
+export function buildPersonUpdatePatch({ displayName, team, attendeeType, shibboleth = '' }) {
   return {
     displayName: displayName.trim(),
     normalizedName: normalizeSearchText(displayName),
     team: team.trim(),
     attendeeType,
+    shibboleth: shibboleth.trim(),
+    normalizedShibboleth: normalizeShibboleth(shibboleth),
     updatedAt: serverTimestamp(),
   }
 }

@@ -6,6 +6,7 @@ export const LEDGER_ENTRY_TYPES = {
   sale: 'sale',
   refund: 'refund',
   drsReturn: 'drsReturn',
+  carryoverIn: 'carryoverIn',
 }
 
 export function buildLedgerEntryRecord({

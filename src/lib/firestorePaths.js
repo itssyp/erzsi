@@ -1,4 +1,5 @@
 export const ACCOUNTS_COLLECTION = 'accounts'
+export const CARRYOVER_BALANCES_COLLECTION = 'carryoverBalances'
 export const EVENTS_COLLECTION = 'events'
 export const SYSTEM_COLLECTION = 'system'
 export const SYSTEM_RUNTIME_DOCUMENT = 'runtime'
@@ -23,6 +24,10 @@ export function getAccountPath(uid) {
 
 export function getAccountEventLinkPath(uid, eventId) {
   return `${getAccountPath(uid)}/${ACCOUNT_SUBCOLLECTIONS.eventLinks}/${eventId}`
+}
+
+export function getCarryoverBalancePath(normalizedShibboleth) {
+  return `${CARRYOVER_BALANCES_COLLECTION}/${normalizedShibboleth}`
 }
 
 export function getSystemRuntimePath() {

@@ -199,7 +199,7 @@ export function StaffPosPanel({ eventId }) {
     if (!normalizedQuery) return []
     return people.filter((person) => {
       if (displayedPerson?.id === person.id) return false
-      const haystack = `${person.displayName} ${person.internalId} ${person.team || ''}`.toLowerCase()
+      const haystack = `${person.displayName} ${person.internalId} ${person.team || ''} ${person.shibboleth || ''}`.toLowerCase()
       return haystack.includes(normalizedQuery)
     }).slice(0, 20)
   }, [deferredSearchQuery, displayedPerson, people])
