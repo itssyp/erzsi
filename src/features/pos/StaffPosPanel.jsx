@@ -56,6 +56,27 @@ const SPRITZER_GUIDE = Object.freeze([
   { name: 'Sportfröccs', ratio: '1:4', wineDl: 1, sodaDl: 4 },
   { name: 'Viceházmester', ratio: '2:3', wineDl: 2, sodaDl: 3 },
 ])
+const BURGER_TRIGGER_PATTERN = /\b(?:ham)?burger\b/i
+const BURGER_SPRITE_KEYWORDS = Object.freeze([
+  { kind: 'patty', keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
+  { kind: 'cheese', keywords: ['sajt', 'cheese', 'cheddar'] },
+  { kind: 'lettuce', keywords: ['salata', 'saláta', 'lettuce'] },
+  { kind: 'tomato', keywords: ['paradicsom', 'tomato'] },
+  { kind: 'onion', keywords: ['hagyma', 'onion'] },
+  { kind: 'bacon', keywords: ['bacon', 'szalonna'] },
+  { kind: 'sauce', keywords: ['szosz', 'szósz', 'sauce', 'ketchup', 'majonez', 'majonéz', 'mustar', 'mustár'] },
+])
+const BURGER_LAYER_ORDER = Object.freeze({
+  sauce: 5,
+  tomato: 10,
+  lettuce: 20,
+  onion: 25,
+  bacon: 28,
+  'cheese:extra': 30,
+  cheese: 40,
+  'patty:extra': 50,
+  patty: 60,
+})
 
 function CameraIcon() {
   return (
@@ -110,6 +131,209 @@ function SpritzerGlass({ wineDl, sodaDl }) {
     <div className="spritzer-glass" aria-hidden="true">
       <div className="spritzer-fill spritzer-soda" style={{ height: sodaPercent, bottom: winePercent }} />
       <div className="spritzer-fill spritzer-wine" style={{ height: winePercent }} />
+    </div>
+  )
+}
+
+function normalizeIngredientLabel(label) {
+  return String(label || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+}
+
+function isBurgerVisualTemplate(product, template) {
+  return BURGER_TRIGGER_PATTERN.test(`${product?.name || ''} ${template?.name || ''}`)
+}
+
+function getBurgerSpriteKind(label) {
+  const normalizedLabel = normalizeIngredientLabel(label)
+  const match = BURGER_SPRITE_KEYWORDS.find((entry) =>
+    entry.keywords.some((keyword) => normalizedLabel.includes(normalizeIngredientLabel(keyword))),
+  )
+
+  return match?.kind || null
+}
+
+function getBurgerLayerOrder(layer) {
+  const sourceKey = layer.source === 'extra' ? `${layer.spriteKind}:extra` : layer.spriteKind
+  return BURGER_LAYER_ORDER[sourceKey] ?? BURGER_LAYER_ORDER[layer.spriteKind] ?? 90
+}
+
+function getBurgerLayerState(template, customizationState) {
+  const knownIngredients = []
+  const unknownIngredients = []
+  const visualExtras = []
+
+  ;(template.defaultIncludedIngredients || []).forEach((ingredient) => {
+    const spriteKind = getBurgerSpriteKind(ingredient.label)
+    const entry = {
+      ...ingredient,
+      spriteKind,
+      source: 'default',
+      included: customizationState?.includedIngredientIds.has(ingredient.id) || false,
+    }
+
+    if (spriteKind) knownIngredients.push(entry)
+    else unknownIngredients.push(entry)
+  })
+
+  ;(customizationState?.extras || []).forEach((extra) => {
+    if (extra.quantity <= 0) return
+    const spriteKind = getBurgerSpriteKind(extra.label)
+    if (!spriteKind) return
+    for (let index = 0; index < extra.quantity; index += 1) {
+      visualExtras.push({
+        ...extra,
+        id: `${extra.id}-${index}`,
+        originalId: extra.id,
+        quantity: 1,
+        spriteKind,
+        source: 'extra',
+        included: true,
+      })
+    }
+  })
+
+  return { knownIngredients, unknownIngredients, visualExtras }
+}
+
+function BurgerLayer({ layer, onToggle }) {
+  const interactive = typeof onToggle === 'function'
+  const className = [
+    'burger-layer',
+    `burger-layer--${layer.spriteKind}`,
+    layer.included ? '' : 'is-removed',
+    interactive ? 'is-interactive' : '',
+  ].filter(Boolean).join(' ')
+
+  return (
+    <button
+      type="button"
+      className={className}
+      onClick={interactive ? onToggle : undefined}
+      disabled={!interactive}
+      aria-pressed={interactive ? layer.included : undefined}
+      title={layer.label}
+    >
+      <span className="burger-layer-sprite" />
+    </button>
+  )
+}
+
+function IngredientToggleChip({ ingredient, onToggle }) {
+  return (
+    <button
+      type="button"
+      className={`ingredient-toggle-chip${ingredient.included ? ' is-included' : ' is-removed'}`}
+      onClick={onToggle}
+      aria-pressed={ingredient.included}
+    >
+      {ingredient.included ? ingredient.label : `Nincs ${ingredient.label}`}
+    </button>
+  )
+}
+
+function CustomizationExtras({ extras, onAdjustQuantity, onUpdateQuantity }) {
+  if (!extras?.length) return null
+
+  return (
+    <div className="stack-block customization-extra-list" style={{ gap: '8px' }}>
+      <h5 className="card-title" style={{ marginBottom: '4px' }}>ExtrÃ¡k</h5>
+      {extras.map((extra) => (
+        <div
+          key={extra.id}
+          className="customization-extra-row"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}
+        >
+          <div style={{ flex: 1, minWidth: 0, paddingRight: '12px' }}>
+            <div style={{ fontWeight: 700, fontSize: '0.875rem' }}>{extra.label}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>+{formatHuf(extra.price)} each</div>
+          </div>
+          <div className="customization-extra-stepper" aria-label={`${extra.label} mennyiseg`}>
+            <button
+              type="button"
+              className="customization-extra-stepper-btn"
+              onClick={() => onAdjustQuantity(extra.id, -1)}
+              disabled={extra.quantity <= 0}
+              aria-label={`${extra.label} csokkentese`}
+            >
+              -
+            </button>
+            <input
+              type="number"
+              min="0"
+              max={extra.maxQuantity}
+              value={extra.quantity}
+              className="customization-extra-input"
+              onChange={(event) => onUpdateQuantity(extra.id, event.target.value)}
+              aria-label={`${extra.label} mennyisege`}
+            />
+            <button
+              type="button"
+              className="customization-extra-stepper-btn"
+              onClick={() => onAdjustQuantity(extra.id, 1)}
+              disabled={extra.quantity >= extra.maxQuantity}
+              aria-label={`${extra.label} novelese`}
+            >
+              +
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function BurgerCustomizer({ template, customizationState, onToggleIngredient, onRemoveExtraLayer, extrasContent }) {
+  const { knownIngredients, unknownIngredients, visualExtras } = getBurgerLayerState(template, customizationState)
+  const visibleLayers = [...knownIngredients, ...visualExtras]
+    .sort((left, right) => getBurgerLayerOrder(left) - getBurgerLayerOrder(right))
+
+  return (
+    <div className="burger-customizer">
+      <div className="burger-stage" aria-label="Burger összetevők">
+        <div className="burger-bun burger-bun--top" aria-hidden="true">
+          <span />
+        </div>
+
+        <div className="burger-stack">
+          {visibleLayers.length ? (
+            visibleLayers.map((layer) => (
+              <BurgerLayer
+                key={`${layer.id}-${layer.quantity || 0}`}
+                layer={layer}
+                onToggle={
+                  layer.source === 'extra'
+                    ? () => onRemoveExtraLayer(layer.originalId)
+                    : () => onToggleIngredient(layer.id)
+                }
+              />
+            ))
+          ) : (
+            <div className="burger-empty-layer">Nincs vizuális összetevő</div>
+          )}
+        </div>
+
+        <div className="burger-bun burger-bun--bottom" aria-hidden="true">
+          <span />
+        </div>
+      </div>
+
+      <div className="burger-chip-panel">
+        <span className="burger-chip-panel-title">Összetevők</span>
+        <div className="burger-chip-row">
+          {[...knownIngredients, ...unknownIngredients].map((ingredient) => (
+            <IngredientToggleChip
+              key={ingredient.id}
+              ingredient={ingredient}
+              onToggle={() => onToggleIngredient(ingredient.id)}
+            />
+          ))}
+        </div>
+        {extrasContent}
+      </div>
     </div>
   )
 }
@@ -340,6 +564,11 @@ export function StaffPosPanel({ eventId }) {
   const displayedBasketSummary = isSwitchingPerson ? EMPTY_BASKET_SUMMARY : basketSummary
   const blockingBasketAction = selectionPending || finalizePending || cancelPending
   const productsDisabled = !selectedPerson || blockingBasketAction
+  const customizationIsBurgerVisual = Boolean(
+    customizingProduct
+    && customizationState
+    && isBurgerVisualTemplate(customizingProduct.product, customizingProduct.template),
+  )
 
   selectedPersonRef.current = selectedPerson
   activeBasketSnapshotRef.current = {
@@ -714,6 +943,45 @@ export function StaffPosPanel({ eventId }) {
     setCustomizingProduct(null)
     setCustomizationState(null)
     addItemToBasket(targetProduct, customization)
+  }
+
+  function toggleCustomizationIngredient(ingredientId) {
+    setCustomizationState((current) => {
+      if (!current) return current
+      const nextIds = new Set(current.includedIngredientIds)
+      if (nextIds.has(ingredientId)) nextIds.delete(ingredientId)
+      else nextIds.add(ingredientId)
+      return { ...current, includedIngredientIds: nextIds }
+    })
+  }
+
+  function updateCustomizationExtraQuantity(extraId, rawValue) {
+    const nextValue = Number.parseInt(rawValue || '0', 10)
+    setCustomizationState((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        extras: current.extras.map((entry) =>
+          entry.id === extraId
+            ? { ...entry, quantity: Math.max(0, Math.min(entry.maxQuantity, Number.isInteger(nextValue) ? nextValue : 0)) }
+            : entry
+        ),
+      }
+    })
+  }
+
+  function adjustCustomizationExtraQuantity(extraId, delta) {
+    setCustomizationState((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        extras: current.extras.map((entry) =>
+          entry.id === extraId
+            ? { ...entry, quantity: Math.max(0, Math.min(entry.maxQuantity, entry.quantity + delta)) }
+            : entry
+        ),
+      }
+    })
   }
 
   function updateBasketLine(lineId, updater) {
@@ -1206,7 +1474,7 @@ export function StaffPosPanel({ eventId }) {
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                width: 'min(680px, calc(100vw - 40px))',
+                width: customizationIsBurgerVisual ? 'min(860px, calc(100vw - 40px))' : 'min(680px, calc(100vw - 40px))',
                 maxHeight: 'calc(100vh - 80px)',
                 zIndex: 1000,
                 background: 'white',
@@ -1233,9 +1501,23 @@ export function StaffPosPanel({ eventId }) {
               </div>
 
               {/* Modal body */}
-              <div className="customization-modal-body" style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
-                <div className="dashboard-grid">
-                  {(customizingProduct.template.defaultIncludedIngredients || []).length > 0 && (
+              <div className={`customization-modal-body${customizationIsBurgerVisual ? ' is-burger' : ''}`} style={{ flex: 1, padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
+                <div className={`dashboard-grid${customizationIsBurgerVisual ? ' customization-grid--burger' : ''}`} style={{ flex: 1, minHeight: 0 }}>
+                  {customizationIsBurgerVisual ? (
+                    <BurgerCustomizer
+                      template={customizingProduct.template}
+                      customizationState={customizationState}
+                      onToggleIngredient={toggleCustomizationIngredient}
+                      onRemoveExtraLayer={(extraId) => adjustCustomizationExtraQuantity(extraId, -1)}
+                      extrasContent={(
+                        <CustomizationExtras
+                          extras={customizationState?.extras || []}
+                          onAdjustQuantity={adjustCustomizationExtraQuantity}
+                          onUpdateQuantity={updateCustomizationExtraQuantity}
+                        />
+                      )}
+                    />
+                  ) : (customizingProduct.template.defaultIncludedIngredients || []).length > 0 && (
                     <div className="stack-block" style={{ gap: '8px' }}>
                       <h5 className="card-title" style={{ marginBottom: '4px' }}>Hozzávalók</h5>
                       {customizingProduct.template.defaultIncludedIngredients.map((ingredient) => (
@@ -1243,14 +1525,7 @@ export function StaffPosPanel({ eventId }) {
                           <input
                             type="checkbox"
                             checked={customizationState?.includedIngredientIds.has(ingredient.id) || false}
-                            onChange={(event) =>
-                              setCustomizationState((current) => {
-                                const nextIds = new Set(current.includedIngredientIds)
-                                if (event.target.checked) nextIds.add(ingredient.id)
-                                else nextIds.delete(ingredient.id)
-                                return { ...current, includedIngredientIds: nextIds }
-                              })
-                            }
+                            onChange={() => toggleCustomizationIngredient(ingredient.id)}
                           />
                           <span style={{ fontWeight: 500, fontSize: '0.875rem' }}>{ingredient.label}</span>
                         </label>
@@ -1258,7 +1533,7 @@ export function StaffPosPanel({ eventId }) {
                     </div>
                   )}
 
-                  {(customizationState?.extras || []).length > 0 && (
+                  {!customizationIsBurgerVisual && (customizationState?.extras || []).length > 0 && (
                     <div className="stack-block" style={{ gap: '8px' }}>
                       <h5 className="card-title" style={{ marginBottom: '4px' }}>Extrák</h5>
                       {customizationState.extras.map((extra) => (
@@ -1267,29 +1542,39 @@ export function StaffPosPanel({ eventId }) {
                           className="customization-extra-row"
                           style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)' }}
                         >
-                          <div>
+                          <div style={{ flex: 1, minWidth: 0, paddingRight: '12px' }}>
                             <div style={{ fontWeight: 700, fontSize: '0.875rem' }}>{extra.label}</div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>+{formatHuf(extra.price)} each</div>
                           </div>
-                          <input
-                            type="number"
-                            min="0"
-                            max={extra.maxQuantity}
-                            value={extra.quantity}
-                            className="customization-extra-input"
-                            style={{ width: '64px', textAlign: 'center' }}
-                            onChange={(event) => {
-                              const nextValue = Number.parseInt(event.target.value || '0', 10)
-                              setCustomizationState((current) => ({
-                                ...current,
-                                extras: current.extras.map((entry) =>
-                                  entry.id === extra.id
-                                    ? { ...entry, quantity: Math.max(0, Math.min(entry.maxQuantity, nextValue)) }
-                                    : entry
-                                ),
-                              }))
-                            }}
-                          />
+                          <div className="customization-extra-stepper" aria-label={`${extra.label} mennyiseg`}>
+                            <button
+                              type="button"
+                              className="customization-extra-stepper-btn"
+                              onClick={() => adjustCustomizationExtraQuantity(extra.id, -1)}
+                              disabled={extra.quantity <= 0}
+                              aria-label={`${extra.label} csokkentese`}
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min="0"
+                              max={extra.maxQuantity}
+                              value={extra.quantity}
+                              className="customization-extra-input"
+                              onChange={(event) => updateCustomizationExtraQuantity(extra.id, event.target.value)}
+                              aria-label={`${extra.label} mennyisege`}
+                            />
+                            <button
+                              type="button"
+                              className="customization-extra-stepper-btn"
+                              onClick={() => adjustCustomizationExtraQuantity(extra.id, 1)}
+                              disabled={extra.quantity >= extra.maxQuantity}
+                              aria-label={`${extra.label} novelese`}
+                            >
+                              +
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
