@@ -178,7 +178,7 @@ export function EventArchivePanel({ activeEventId }) {
                       <div>
                         <strong>{order.personDisplayName}</strong>
                         <p className="helper-text">
-                          {order.personInternalId} | {formatTimestamp(order.createdAt)}
+                          {order.personDisplayId || order.personInternalId} | {formatTimestamp(order.createdAt)}
                         </p>
                       </div>
                       <div className="pill-row">

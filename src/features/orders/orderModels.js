@@ -1,5 +1,6 @@
 import { serverTimestamp } from 'firebase/firestore'
 import { isFoodCategory } from '../products/productModels'
+import { getPersonDisplayId } from '../people/personModels'
 
 export const ORDER_STATUSES = {
   finalized: 'finalized',
@@ -31,6 +32,7 @@ export function buildOrderRecord({
     personId: person.id,
     personDisplayName: person.displayName,
     personInternalId: person.internalId,
+    personDisplayId: getPersonDisplayId(person),
     status: ORDER_STATUSES.finalized,
     lines: basket.items.map((item) => ({
       ...item,

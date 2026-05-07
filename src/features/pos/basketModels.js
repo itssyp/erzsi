@@ -1,6 +1,7 @@
 import { serverTimestamp } from 'firebase/firestore'
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { normalizeProductCategory } from '../products/productModels'
+import { getPersonDisplayId } from '../people/personModels'
 
 export const BASKET_STATUSES = {
   open: 'open',
@@ -72,6 +73,7 @@ export function buildOpenBasketRecord({
     personId: person.id,
     personDisplayName: person.displayName,
     personInternalId: person.internalId,
+    personDisplayId: getPersonDisplayId(person),
     status: BASKET_STATUSES.open,
     items: summary.items,
     itemCount: summary.itemCount,

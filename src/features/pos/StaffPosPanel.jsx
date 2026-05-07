@@ -9,6 +9,7 @@ import { useQrScanner } from '../qr/useQrScanner'
 import { usePosSession } from './usePosSession'
 import { PRODUCT_CATEGORIES, subscribeToProducts } from '../products/productService'
 import { isFoodCategory, normalizeProductCategory } from '../products/productModels'
+import { getPersonDisplayId } from '../people/personModels'
 import {
   acquireBasketLock,
   cancelBasket,
@@ -47,6 +48,14 @@ const EMPTY_BASKET_SUMMARY = Object.freeze({
   itemCount: 0,
   totalAmount: 0,
 })
+const SPRITZER_GUIDE = Object.freeze([
+  { name: 'Kisfröccs', ratio: '1:1', wineDl: 1, sodaDl: 1 },
+  { name: 'Nagyfröccs', ratio: '2:1', wineDl: 2, sodaDl: 1 },
+  { name: 'Hosszúlépés', ratio: '1:2', wineDl: 1, sodaDl: 2 },
+  { name: 'Házmester', ratio: '3:2', wineDl: 3, sodaDl: 2 },
+  { name: 'Sportfröccs', ratio: '1:4', wineDl: 1, sodaDl: 4 },
+  { name: 'Viceházmester', ratio: '2:3', wineDl: 2, sodaDl: 3 },
+])
 
 function CameraIcon() {
   return (
@@ -78,6 +87,30 @@ function CheckIcon() {
         fill="currentColor"
       />
     </svg>
+  )
+}
+
+function HelpIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="action-icon">
+      <path
+        d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 17.2a1.15 1.15 0 1 1 0-2.3 1.15 1.15 0 0 1 0 2.3zm1.1-5.35v1.05h-2.2v-1.35c0-1.1.66-1.78 1.58-2.34.78-.48 1.22-.84 1.22-1.55 0-.84-.67-1.38-1.64-1.38-.95 0-1.68.5-2.18 1.48L8 8.7c.77-1.62 2.2-2.52 4.18-2.52 2.33 0 3.9 1.28 3.9 3.34 0 1.53-.84 2.33-1.95 3.02-.72.44-1.03.74-1.03 1.31z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
+
+function SpritzerGlass({ wineDl, sodaDl }) {
+  const totalDl = wineDl + sodaDl
+  const winePercent = `${(wineDl / totalDl) * 100}%`
+  const sodaPercent = `${(sodaDl / totalDl) * 100}%`
+
+  return (
+    <div className="spritzer-glass" aria-hidden="true">
+      <div className="spritzer-fill spritzer-soda" style={{ height: sodaPercent, bottom: winePercent }} />
+      <div className="spritzer-fill spritzer-wine" style={{ height: winePercent }} />
+    </div>
   )
 }
 
@@ -162,6 +195,7 @@ export function StaffPosPanel({ eventId }) {
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [customizingProduct, setCustomizingProduct] = useState(null)
   const [customizationState, setCustomizationState] = useState(null)
+  const [spritzerGuideOpen, setSpritzerGuideOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [selectionPending, setSelectionPending] = useState(false)
@@ -227,6 +261,19 @@ export function StaffPosPanel({ eventId }) {
     return subscribeToModifierTemplates(eventId, setModifierTemplates, (error) => setErrorMessage(error.message))
   }, [eventId])
 
+  useEffect(() => {
+    if (!spritzerGuideOpen) return undefined
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setSpritzerGuideOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [spritzerGuideOpen])
+
   const displayedPerson = switchTargetPerson || selectedPerson
   const isSwitchingPerson = Boolean(switchTargetPerson)
 
@@ -243,7 +290,6 @@ export function StaffPosPanel({ eventId }) {
     const visibleProducts = products
       .filter((product) => {
         if (!product.isActive) return false
-        if (selectedCategory === MISC_CATEGORY) return false
         const normalizedCategory = normalizeProductCategory(product.category)
         return selectedCategory === 'all' ? true : normalizedCategory === selectedCategory
       })
@@ -898,7 +944,7 @@ export function StaffPosPanel({ eventId }) {
                 >
                   <span>
                     <strong>{person.displayName}</strong>
-                    <small>{person.internalId}{person.team ? ` · ${person.team}` : ''}</small>
+                    <small>{getPersonDisplayId(person)}{person.team ? ` · ${person.team}` : ''}</small>
                   </span>
                   <span style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--primary)', flexShrink: 0 }}>
                     {formatHuf(person.balance || 0)}
@@ -917,7 +963,7 @@ export function StaffPosPanel({ eventId }) {
               <>
                 <div style={{ fontWeight: 800, fontSize: '1rem' }}>{displayedPerson.displayName}</div>
                 <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '2px' }}>
-                  #{displayedPerson.internalId}
+                  #{getPersonDisplayId(displayedPerson)}
                 </div>
                 <div style={{ borderTop: '1px dashed var(--border)', marginTop: '8px', paddingTop: '8px', fontSize: '0.85rem' }}>
                   Egyenleg: {formatHuf(displayedPerson.balance || 0)}
@@ -1038,14 +1084,15 @@ export function StaffPosPanel({ eventId }) {
         <div className="pos-catalog-header">
           <div className="category-row">
             {allCategories.map((category) => (
-              <button
-                key={category}
-                type="button"
-                className={`category-btn${selectedCategory === category ? ' active' : ''}`}
-                onClick={() => setSelectedCategory(category)}
-              >
-                {category}
-              </button>
+              <div key={category}>
+                <button
+                  type="button"
+                  className={`category-btn${selectedCategory === category ? ' active' : ''}`}
+                  onClick={() => setSelectedCategory(category)}
+                >
+                  {category}
+                </button>
+              </div>
             ))}
           </div>
 
@@ -1077,8 +1124,21 @@ export function StaffPosPanel({ eventId }) {
           >
             {groupedProducts.map((group) => (
               <section key={group.category} className="product-category-section">
-                {showProductCategoryHeadings ? (
-                  <h4 className="product-category-title">{group.category}</h4>
+                {showProductCategoryHeadings || group.category === 'Bor' ? (
+                  <div className="product-category-title-row">
+                    <h4 className="product-category-title">{group.category}</h4>
+                    {group.category === 'Bor' ? (
+                      <button
+                        type="button"
+                        className="spritzer-help-button"
+                        onClick={() => setSpritzerGuideOpen(true)}
+                        aria-label="Fröccs útmutató megnyitása"
+                        title="Fröccs útmutató"
+                      >
+                        <HelpIcon />
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
                 <div className="product-grid">
                   {group.items.map((product) => (
@@ -1094,6 +1154,42 @@ export function StaffPosPanel({ eventId }) {
             ))}
           </div>
         </div>
+
+        {spritzerGuideOpen && (
+          <>
+            <div className="modal-backdrop spritzer-guide-backdrop" onClick={() => setSpritzerGuideOpen(false)} />
+            <div className="spritzer-guide-modal floating-overlay" role="dialog" aria-modal="true" aria-labelledby="spritzerGuideTitle">
+              <div className="spritzer-guide-header">
+                <div>
+                  <div className="spritzer-guide-eyebrow">Bor + szóda</div>
+                  <h4 id="spritzerGuideTitle">Fröccs útmutató</h4>
+                </div>
+                <button type="button" className="secondary-button" onClick={() => setSpritzerGuideOpen(false)}>
+                  Bezárás
+                </button>
+              </div>
+
+              <div className="spritzer-guide-grid">
+                {SPRITZER_GUIDE.map((spritzer) => (
+                  <article key={spritzer.name} className="spritzer-card">
+                    <SpritzerGlass wineDl={spritzer.wineDl} sodaDl={spritzer.sodaDl} />
+                    <div className="spritzer-card-body">
+                      <div className="spritzer-card-title-row">
+                        <h5>{spritzer.name}</h5>
+                        <span>{spritzer.ratio}</span>
+                      </div>
+                      <div className="spritzer-recipe-row">
+                        <span className="spritzer-recipe-pill spritzer-recipe-wine">{spritzer.wineDl} dl bor</span>
+                        <span className="spritzer-recipe-plus">+</span>
+                        <span className="spritzer-recipe-pill spritzer-recipe-soda">{spritzer.sodaDl} dl szóda</span>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
         {/* Customization modal */}
         {customizingProduct && (

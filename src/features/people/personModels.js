@@ -110,3 +110,14 @@ export function buildPersonRestorePatch() {
     updatedAt: serverTimestamp(),
   }
 }
+
+/**
+ * Returns the preferred public identifier for a person.
+ * Priority: 5-digit QR ID > Shibboleth > Internal ID
+ * @param {PersonRecord} person
+ * @returns {string}
+ */
+export function getPersonDisplayId(person) {
+  if (!person) return ''
+  return person.assignedQrId || person.qrCodeId || person.shibboleth || person.internalId || ''
+}

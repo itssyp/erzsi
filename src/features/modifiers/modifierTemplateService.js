@@ -74,3 +74,30 @@ export async function saveModifierTemplate({
   batch.set(auditLogWrite.ref, auditLogWrite.data)
   await batch.commit()
 }
+
+export async function deleteModifierTemplate({
+  eventId,
+  actorUid,
+  templateId,
+  name,
+}) {
+  const batch = writeBatch(db)
+  const targetRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.modifierTemplates, templateId))
+
+  batch.delete(targetRef)
+
+  const auditLogWrite = createAuditLogWrite({
+    eventId,
+    type: AUDIT_TYPES.modifierTemplateChange,
+    actorUid,
+    summary: `Deleted modifier template ${name}`,
+    targetType: 'modifierTemplate',
+    targetId: templateId,
+    details: {
+      deletedAt: new Date().toISOString(),
+    },
+  })
+
+  batch.set(auditLogWrite.ref, auditLogWrite.data)
+  await batch.commit()
+}

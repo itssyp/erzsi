@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { read, utils } from 'xlsx'
 import { formatHuf, parseHufInteger } from '../../lib/money'
 import { PRODUCT_CATEGORIES, normalizeProductCategory } from '../products/productModels'
-import { clearProducts, importProducts, saveProduct, subscribeToProducts } from '../products/productService'
-import { saveModifierTemplate, subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
+import { clearProducts, deleteProduct, importProducts, saveProduct, subscribeToProducts } from '../products/productService'
+import { deleteModifierTemplate, saveModifierTemplate, subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
 
 const emptyProductState = {
   productId: null,
@@ -383,6 +383,24 @@ export function ProductManagementPanel({ eventId, actorUid }) {
     setStatusMessage(isEditing ? 'A termék frissítve lett.' : 'A termék létrejött.')
   }
 
+  async function handleDeleteProduct() {
+    if (!productState.productId) return
+    const confirmed = window.confirm(`Biztosan törlöd a(z) "${productState.name}" terméket?`)
+    if (!confirmed) return
+
+    await runAction(() =>
+      deleteProduct({
+        eventId,
+        actorUid,
+        productId: productState.productId,
+        name: productState.name,
+      }),
+    )
+
+    setProductState(emptyProductState)
+    setStatusMessage('A termék törölve lett.')
+  }
+
   async function handleProductImport(event) {
     const file = event.target.files?.[0]
 
@@ -450,6 +468,24 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
     setTemplateState(emptyTemplateState)
     setStatusMessage(isEditing ? 'A módosítósablon frissítve lett.' : 'A módosítósablon létrejött.')
+  }
+
+  async function handleDeleteTemplate() {
+    if (!templateState.templateId) return
+    const confirmed = window.confirm(`Biztosan törlöd a(z) "${templateState.name}" módosítósablont?`)
+    if (!confirmed) return
+
+    await runAction(() =>
+      deleteModifierTemplate({
+        eventId,
+        actorUid,
+        templateId: templateState.templateId,
+        name: templateState.name,
+      }),
+    )
+
+    setTemplateState(emptyTemplateState)
+    setStatusMessage('A módosítósablon törölve lett.')
   }
 
   function loadProductIntoForm(product) {
@@ -818,14 +854,24 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                     {productState.productId ? 'Frissítés' : 'Mentés'}
                   </button>
                   {productState.productId ? (
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => setProductState(emptyProductState)}
-                      disabled={pending}
-                    >
-                      Mégse
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="danger-button"
+                        onClick={handleDeleteProduct}
+                        disabled={pending}
+                      >
+                        Törlés
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => setProductState(emptyProductState)}
+                        disabled={pending}
+                      >
+                        Mégse
+                      </button>
+                    </>
                   ) : null}
                 </div>
               </form>
@@ -1006,14 +1052,24 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       {templateState.templateId ? 'Frissítés' : 'Mentés'}
                     </button>
                     {templateState.templateId ? (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => setTemplateState(emptyTemplateState)}
-                        disabled={pending}
-                      >
-                        Mégse
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="danger-button"
+                          onClick={handleDeleteTemplate}
+                          disabled={pending}
+                        >
+                          Törlés
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => setTemplateState(emptyTemplateState)}
+                          disabled={pending}
+                        >
+                          Mégse
+                        </button>
+                      </>
                     ) : null}
                   </div>
                 </form>

@@ -9,6 +9,7 @@ const generateQrCredentialsCallable = httpsCallable(functions, 'generateQrCreden
 const assignQrCredentialToPersonaCallable = httpsCallable(functions, 'assignQrCredentialToPersona')
 const revokeQrCredentialFromPersonaCallable = httpsCallable(functions, 'revokeQrCredentialFromPersona')
 const resolveAssignedQrCredentialCallable = httpsCallable(functions, 'resolveAssignedQrCredential')
+const selfAssignQrCredentialCallable = httpsCallable(functions, 'selfAssignQrCredential')
 
 export { QR_CREDENTIAL_STATUSES }
 
@@ -56,6 +57,17 @@ export async function revokeQrForPerson({ eventId, personId }) {
   const result = await revokeQrCredentialFromPersonaCallable({
     eventId,
     personId,
+  })
+
+  return result.data
+}
+
+export async function selfAssignQrCredential({ eventId, qrInput }) {
+  const normalizedQr = normalizeQrInput(qrInput)
+  const result = await selfAssignQrCredentialCallable({
+    eventId,
+    qrInput: normalizedQr,
+    appBaseUrl: window.location.origin,
   })
 
   return result.data

@@ -1152,3 +1152,108 @@ export const joinEventByShibboleth = onCall(callableOptions, async (request) => 
     person: joinedPerson,
   }
 })
+
+export const selfAssignQrCredential = onCall(callableOptions, async (request) => {
+  const authContext = ensureAuthenticated(request)
+  const uid = authContext.uid
+  const eventId = normalizeEventId(request.data?.eventId)
+  const qrCode = normalizeScannedQrCode(request.data?.qrInput)
+  const appBaseUrl = typeof request.data?.appBaseUrl === 'string' && request.data.appBaseUrl.trim()
+    ? sanitizeAppBaseUrl(request.data.appBaseUrl)
+    : null
+
+  const eventLinkRef = db.doc(`accounts/${uid}/eventLinks/${eventId}`)
+  const eventLinkSnapshot = await eventLinkRef.get()
+
+  if (!eventLinkSnapshot.exists) {
+    throw new HttpsError('not-found', 'Your account is not linked to a persona in this event.')
+  }
+
+  const personId = eventLinkSnapshot.data().personId
+
+  if (!personId) {
+    throw new HttpsError('not-found', 'Your account is not linked to a persona in this event.')
+  }
+
+  await db.runTransaction(async (transaction) => {
+    const personRef = getPersonRef(eventId, personId)
+    const credentialRef = getQrCredentialRef(eventId, qrCode)
+    const auditLogRef = createAuditLogRef(eventId)
+
+    const [personSnapshot, credentialSnapshot] = await Promise.all([
+      transaction.get(personRef),
+      transaction.get(credentialRef),
+    ])
+
+    if (!personSnapshot.exists) {
+      throw new HttpsError('not-found', 'Persona was not found.')
+    }
+
+    const person = personSnapshot.data()
+
+    if (person.recordStatus === 'deleted') {
+      throw new HttpsError('failed-precondition', 'This persona cannot receive a QR credential.')
+    }
+
+    // Verify the caller actually owns this persona
+    if (person.linkedAuthUid !== uid) {
+      throw new HttpsError('permission-denied', 'This persona is not linked to your account.')
+    }
+
+    // Block self-assign if persona already has a QR (staff must revoke first)
+    const currentQrCode = person.assignedQrId || person.qrCodeId || null
+    if (currentQrCode) {
+      throw new HttpsError('failed-precondition', 'Your profile already has a QR code. Ask a staff member to remove it first.')
+    }
+
+    if (!credentialSnapshot.exists) {
+      throw new HttpsError('not-found', 'QR code not found. Check the code and try again.')
+    }
+
+    const credential = normalizeQrCredentialSnapshot(credentialSnapshot)
+
+    if (credential.status === QR_STATUSES.revoked) {
+      throw new HttpsError('failed-precondition', 'This QR code has been revoked and cannot be claimed.')
+    }
+
+    if (credential.status === QR_STATUSES.assigned) {
+      throw new HttpsError('failed-precondition', 'This QR code is already in use.')
+    }
+
+    const nextLink = credential.link || (appBaseUrl ? buildQrCredentialLink(appBaseUrl, qrCode) : '')
+
+    if (!nextLink) {
+      throw new HttpsError('failed-precondition', 'QR credential link could not be determined.')
+    }
+
+    transaction.set(
+      credentialRef,
+      buildAssignedQrCredentialPatch({
+        code: qrCode,
+        link: nextLink,
+        personId,
+        linkedAccountId: uid,
+        actorUid: uid,
+        assignedAt: null,
+      }),
+      { merge: true },
+    )
+
+    transaction.set(personRef, buildPersonQrAssignmentPatch({ qrCode, qrLink: nextLink }), { merge: true })
+
+    transaction.set(
+      auditLogRef,
+      buildAuditLogRecord({
+        type: AUDIT_TYPES.qrAssignment,
+        actorUid: uid,
+        summary: `Self-assigned QR ${qrCode} to persona ${person.displayName || personId}`,
+        targetType: 'person',
+        targetId: personId,
+        personId,
+        details: { qrCode, selfAssign: true },
+      }),
+    )
+  })
+
+  return { personId, qrCode }
+})

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { StatusCard } from '../../components/StatusCard'
 import { LoadingScreen } from '../../components/LoadingScreen'
 import { formatHuf } from '../../lib/money'
@@ -10,6 +10,8 @@ import { joinEventByShibboleth } from '../user/userService'
 import { TabShell } from '../../components/TabShell'
 import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
 import { isFoodCategory } from '../products/productModels'
+import { getPersonDisplayId } from '../people/personModels'
+import { QrSelfAssignOverlay } from '../qr/QrSelfAssignOverlay'
 
 const FOOD_STATUS_STEPS = [
   FOOD_ORDER_STATUSES.new,
@@ -83,6 +85,9 @@ export function UserDashboardPage() {
   const [joinPending, setJoinPending] = useState(false)
   const [joinError, setJoinError] = useState('')
   const [joinStatus, setJoinStatus] = useState('')
+  const [showQrAssign, setShowQrAssign] = useState(false)
+
+  const handleQrAssignClose = useCallback(() => setShowQrAssign(false), [])
   const { loading, person, orders, activeFoodOrder, hasLinkedPerson, error } = useUserDashboardData({
     uid: user?.uid,
     eventId: activeEventId,
@@ -137,7 +142,32 @@ export function UserDashboardPage() {
           </section>
 
           <div className="user-qr-slot">
-            <QrCodeCard value={person.assignedQrLink || person.qrCodeId} label="Saját QR-kód" />
+            {(person.assignedQrLink || person.qrCodeId) ? (
+              <QrCodeCard value={person.assignedQrLink || person.qrCodeId} label="Saját QR-kód" />
+            ) : (
+              <section className="panel qr-panel user-qr-unassigned">
+                <h3 className="card-title">Saját QR-kód</h3>
+                <div className="user-qr-empty">
+                  <svg className="user-qr-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                    <rect x="3" y="3" width="7" height="7" rx="1" />
+                    <rect x="14" y="3" width="7" height="7" rx="1" />
+                    <rect x="3" y="14" width="7" height="7" rx="1" />
+                    <rect x="14" y="14" width="3" height="3" rx="0.5" />
+                    <rect x="19" y="14" width="2" height="2" rx="0.5" />
+                    <rect x="14" y="19" width="2" height="2" rx="0.5" />
+                    <rect x="18" y="18" width="3" height="3" rx="0.5" />
+                  </svg>
+                  <p className="helper-text">Még nincs QR-kód hozzárendelve.</p>
+                  <button
+                    type="button"
+                    className="primary-button user-qr-claim-btn"
+                    onClick={() => setShowQrAssign(true)}
+                  >
+                    QR-kód igénylése
+                  </button>
+                </div>
+              </section>
+            )}
           </div>
 
           <section className="panel user-flat-section">
@@ -145,8 +175,7 @@ export function UserDashboardPage() {
             <ul className="detail-list">
               <li><strong>Megjelenített név</strong> <span>{account?.displayName || user?.displayName || '-'}</span></li>
               <li><strong>E-mail</strong> <span style={{ fontSize: '0.82rem' }}>{account?.email || user?.email || '-'}</span></li>
-              <li><strong>Belső azonosító</strong> <span>{person.internalId}</span></li>
-              <li><strong>QR-azonosító</strong> <span>{person.assignedQrId || person.qrCodeId || 'Nincs hozzárendelve'}</span></li>
+              <li><strong>Azonosító</strong> <span>{getPersonDisplayId(person)}</span></li>
             </ul>
           </section>
         </div>
@@ -287,6 +316,13 @@ export function UserDashboardPage() {
           <TabShell tabs={tabs} className="user-tab-shell" />
         </div>
       )}
+
+      {showQrAssign && hasLinkedPerson ? (
+        <QrSelfAssignOverlay
+          eventId={activeEventId}
+          onClose={handleQrAssignClose}
+        />
+      ) : null}
     </div>
   )
 }

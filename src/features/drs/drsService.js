@@ -13,6 +13,7 @@ import { AUDIT_TYPES } from '../audit/auditModels'
 import { buildLedgerEntryRecord, LEDGER_ENTRY_TYPES } from '../ledger/ledgerModels'
 import { EVENT_SUBCOLLECTIONS, getEventCollectionPath, getEventScopedPath } from '../../lib/firestorePaths'
 import { buildDrsReturnRecord, DRS_DEPOSIT_AMOUNT } from './drsModels'
+import { getPersonDisplayId } from '../people/personModels'
 
 export async function createDrsReturn({ eventId, personId, quantity, actorUid, actorName }) {
   if (!Number.isInteger(quantity) || quantity < 1) {
@@ -63,6 +64,7 @@ export async function createDrsReturn({ eventId, personId, quantity, actorUid, a
         personId,
         personDisplayName: person.displayName,
         personInternalId: person.internalId,
+        personDisplayId: getPersonDisplayId(person),
         quantity,
         balanceBefore,
         balanceAfter,

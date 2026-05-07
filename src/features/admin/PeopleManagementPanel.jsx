@@ -3,7 +3,7 @@ import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
 import { StatusCard } from '../../components/StatusCard'
 import { formatHuf, parseHufInteger } from '../../lib/money'
-import { ATTENDEE_TYPES, PERSON_RECORD_STATUSES } from '../people/personModels'
+import { ATTENDEE_TYPES, PERSON_RECORD_STATUSES, getPersonDisplayId } from '../people/personModels'
 import {
   adjustPersonBalance,
   deletePersonRecord,
@@ -214,7 +214,8 @@ function PersonProfileTab({ selectedPerson, editState, setEditState, pending, on
         )}
       </div>
       <ul className="detail-list" style={{ fontSize: '0.8rem', marginTop: '4px' }}>
-        <li><strong>Internal ID</strong> <span style={{ fontFamily: 'monospace' }}>{selectedPerson.internalId}</span></li>
+        <li><strong>Public ID</strong> <span style={{ fontFamily: 'monospace' }}>{getPersonDisplayId(selectedPerson)}</span></li>
+        <li><strong>Internal ID</strong> <span style={{ fontFamily: 'monospace', color: 'var(--muted)', fontSize: '0.9em' }}>{selectedPerson.internalId}</span></li>
         <li><strong>Status</strong> <span style={{ textTransform: 'capitalize' }}>{selectedPerson.recordStatus}</span></li>
         <li><strong>Created</strong> <span>{formatTimestamp(selectedPerson.createdAt)}</span></li>
       </ul>
@@ -1221,9 +1222,8 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                         <span>
                           <strong>{person.displayName}</strong>
                           <small>
-                            {person.internalId}
+                            {getPersonDisplayId(person)}
                             {person.team ? ` · ${person.team}` : ''}
-                            {person.shibboleth ? ` · ${person.shibboleth}` : ''}
                           </small>
                         </span>
                       </span>

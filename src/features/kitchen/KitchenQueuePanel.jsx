@@ -274,7 +274,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                       <div className="kds-ticket-header receipt-header">
                         <div className="kds-ticket-header-row">
                           <span className="kds-ticket-name">{order.personDisplayName}</span>
-                          <span className="kds-ticket-id">#{order.personInternalId}</span>
+                          <span className="kds-ticket-id">#{order.personDisplayId || order.personInternalId}</span>
                         </div>
                         <div className="kds-ticket-meta">
                           <span className="kds-ticket-time">{formatTimestamp(order.createdAt)}</span>

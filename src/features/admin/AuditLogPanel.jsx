@@ -5,6 +5,7 @@ import { subscribeToAccountsDirectory } from '../auth/accountService'
 import { subscribeToEventsList } from '../events/eventService'
 import { refundOrder } from '../orders/orderService'
 import { AUDIT_TYPES } from '../audit/auditModels'
+import { getPersonDisplayId } from '../people/personModels'
 
 const DEFAULT_LOGS_PER_PAGE = 25
 const PAGE_SIZE_OPTIONS = [25, 50, 100]
@@ -48,9 +49,8 @@ function buildPersonLabel(personId, peopleById) {
 
   return [
     person.displayName,
-    person.internalId ? `#${person.internalId}` : null,
+    `#${getPersonDisplayId(person)}`,
     person.team || null,
-    person.shibboleth || null,
   ].filter(Boolean).join(' - ')
 }
 

@@ -64,7 +64,7 @@ export function DrsSummaryPanel({ eventId }) {
               <div key={entry.id} className="record-row" style={{ cursor: 'default' }}>
                 <span>
                   <strong>{entry.personDisplayName}</strong>
-                  <small>#{entry.personInternalId} · {entry.actorName}</small>
+                  <small>#{entry.personDisplayId || entry.personInternalId} · {entry.actorName}</small>
                 </span>
                 <span style={{ textAlign: 'right', flexShrink: 0 }}>
                   <strong>{entry.quantity} palack</strong>

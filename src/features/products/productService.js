@@ -187,3 +187,30 @@ export async function clearProducts({
 
   return snapshot.size
 }
+
+export async function deleteProduct({
+  eventId,
+  actorUid,
+  productId,
+  name,
+}) {
+  const batch = writeBatch(db)
+  const targetRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.products, productId))
+
+  batch.delete(targetRef)
+
+  const auditLogWrite = createAuditLogWrite({
+    eventId,
+    type: AUDIT_TYPES.productChange,
+    actorUid,
+    summary: `Deleted product ${name}`,
+    targetType: 'product',
+    targetId: productId,
+    details: {
+      deletedAt: new Date().toISOString(),
+    },
+  })
+
+  batch.set(auditLogWrite.ref, auditLogWrite.data)
+  await batch.commit()
+}
