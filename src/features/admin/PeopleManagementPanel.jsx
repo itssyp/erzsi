@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
 import { StatusCard } from '../../components/StatusCard'
 import { formatHuf, parseHufInteger } from '../../lib/money'
@@ -491,6 +492,131 @@ function PersonBalanceTab({
   )
 }
 
+// ── QR rendering helpers ───────────────────────────────────────────────────
+function QrImage({ value, size = 160 }) {
+  const canvasRef = useRef(null)
+
+  useEffect(() => {
+    if (!value || !canvasRef.current) return
+    QRCode.toCanvas(canvasRef.current, value, {
+      width: size,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    }).catch(console.error)
+  }, [value, size])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={size}
+      height={size}
+      style={{ display: 'block', borderRadius: 4 }}
+    />
+  )
+}
+
+function QrPoolRow({ cred }) {
+  const [expanded, setExpanded] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const value = cred.link || cred.code
+
+  async function handleDownload() {
+    if (!value) return
+    setDownloading(true)
+    try {
+      const dataUrl = await QRCode.toDataURL(value, { width: 512, margin: 2, errorCorrectionLevel: 'M' })
+      const a = document.createElement('a')
+      a.href = dataUrl
+      a.download = `qr-${cred.code}.png`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+    } catch (error) {
+      console.error('QR download failed', error)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <div className={`qr-pool-row${expanded ? ' expanded' : ''}`}>
+      <div className="qr-pool-row-main">
+        <span className="qr-pool-row-info">
+          <strong>{cred.code}</strong>
+          <small>{cred.link || 'Link pending'}</small>
+        </span>
+        <span className="qr-pool-row-actions">
+          <button
+            type="button"
+            className="secondary-button btn-sm"
+            onClick={() => setExpanded((v) => !v)}
+            disabled={!value}
+          >
+            {expanded ? 'Hide' : 'View'}
+          </button>
+          <button
+            type="button"
+            className="secondary-button btn-sm"
+            onClick={handleDownload}
+            disabled={downloading || !value}
+          >
+            {downloading ? '…' : '↓ PNG'}
+          </button>
+        </span>
+      </div>
+      {expanded && value ? (
+        <div className="qr-inline-view">
+          <QrImage value={value} size={160} />
+          <span className="qr-inline-code">{cred.code}</span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function buildPrintHtml(items) {
+  const cells = items
+    .map(({ code, dataUrl }) =>
+      `<div class="cell"><img src="${dataUrl}" alt="${code}"><div class="lbl">${code}</div></div>`,
+    )
+    .join('')
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>QR Codes — ${items.length} codes</title>
+<style>
+  @page { size: A4 portrait; margin: 10mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; background: #fff; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(11, 15mm);
+    gap: 2.5mm;
+  }
+  .cell {
+    break-inside: avoid;
+    text-align: center;
+  }
+  .cell img {
+    width: 15mm;
+    height: 15mm;
+    display: block;
+  }
+  .lbl {
+    font-size: 6pt;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.04em;
+    margin-top: 0.8mm;
+    line-height: 1.2;
+  }
+</style>
+</head>
+<body><div class="grid">${cells}</div></body>
+</html>`
+}
+
 // ── QR Pool tab ────────────────────────────────────────────────────────────
 function QrPoolTab({
   qrCredentials,
@@ -501,7 +627,34 @@ function QrPoolTab({
   pending,
   onGenerateBatch,
 }) {
+  const [printLoading, setPrintLoading] = useState(false)
   const assignedCount = qrCredentials.filter((c) => c.status === QR_CREDENTIAL_STATUSES.assigned).length
+
+  async function handlePrint() {
+    const eligible = unassignedQrCredentials.filter((c) => c.link || c.code)
+    if (!eligible.length) return
+    setPrintLoading(true)
+    try {
+      const items = await Promise.all(
+        eligible.map(async (cred) => {
+          const value = cred.link || cred.code
+          const dataUrl = await QRCode.toDataURL(value, { width: 200, margin: 1, errorCorrectionLevel: 'M' })
+          return { code: cred.code, dataUrl }
+        }),
+      )
+      const html = buildPrintHtml(items)
+      const win = window.open('', '_blank', 'width=900,height=700')
+      if (!win) return
+      win.document.write(html)
+      win.document.close()
+      win.focus()
+      setTimeout(() => win.print(), 400)
+    } catch (error) {
+      console.error('Print failed', error)
+    } finally {
+      setPrintLoading(false)
+    }
+  }
 
   return (
     <div className="stack-block" style={{ gap: '20px' }}>
@@ -548,16 +701,26 @@ function QrPoolTab({
 
       {/* Unassigned pool */}
       <section className="panel">
-        <h4 className="card-title">Unassigned pool ({unassignedQrCredentials.length})</h4>
-        <p className="helper-text">These credentials are ready to be assigned to a persona.</p>
-        <div className="record-list compact" style={{ marginTop: '10px' }}>
+        <div className="split-header" style={{ marginBottom: '10px' }}>
+          <div>
+            <h4 className="card-title">Unassigned pool ({unassignedQrCredentials.length})</h4>
+            <p className="helper-text">Ready to be assigned to a persona.</p>
+          </div>
+          {unassignedQrCredentials.length > 0 ? (
+            <button
+              type="button"
+              className="secondary-button btn-sm"
+              onClick={handlePrint}
+              disabled={printLoading}
+              title="Generate print-ready A4 sheet of all unassigned QR codes"
+            >
+              {printLoading ? 'Generating…' : '🖨 Print sheet'}
+            </button>
+          ) : null}
+        </div>
+        <div className="qr-pool-list">
           {unassignedQrCredentials.map((cred) => (
-            <div key={cred.id} className="record-row">
-              <span>
-                <strong style={{ fontFamily: 'monospace', letterSpacing: '0.1em' }}>{cred.code}</strong>
-                <small style={{ wordBreak: 'break-all' }}>{cred.link || 'Link pending'}</small>
-              </span>
-            </div>
+            <QrPoolRow key={cred.id} cred={cred} />
           ))}
           {unassignedQrCredentials.length === 0 && (
             <p className="helper-text">No unassigned credentials. Generate a batch above.</p>
@@ -567,16 +730,11 @@ function QrPoolTab({
 
       {/* Revoked */}
       <section className="panel">
-        <h4 className="card-title">Revoked credentials ({revokedQrCredentials.length})</h4>
-        <p className="helper-text">Revoked credentials are permanently inactivated and cannot be reassigned.</p>
-        <div className="record-list compact" style={{ marginTop: '10px' }}>
+        <h4 className="card-title" style={{ marginBottom: '6px' }}>Revoked credentials ({revokedQrCredentials.length})</h4>
+        <p className="helper-text" style={{ marginBottom: '10px' }}>Permanently inactivated, cannot be reassigned.</p>
+        <div className="qr-pool-list">
           {revokedQrCredentials.map((cred) => (
-            <div key={cred.id} className="record-row">
-              <span>
-                <strong style={{ fontFamily: 'monospace', letterSpacing: '0.1em' }}>{cred.code}</strong>
-                <small>Revoked {formatTimestamp(cred.revokedAt)}</small>
-              </span>
-            </div>
+            <QrPoolRow key={cred.id} cred={cred} />
           ))}
           {revokedQrCredentials.length === 0 && (
             <p className="helper-text">No revoked credentials.</p>

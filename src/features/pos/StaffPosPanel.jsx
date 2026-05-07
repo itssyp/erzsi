@@ -1,10 +1,10 @@
-import { memo, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { StatusCard } from '../../components/StatusCard'
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { formatHuf } from '../../lib/money'
 import { getStaffSessionId } from '../../lib/session'
 import { useAuth } from '../auth/useAuth'
 import { subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
 import { PERSON_RECORD_STATUSES, subscribeToPeople } from '../people/personService'
+import { normalizeQrInput } from '../qr/qrLinks'
 import { useQrScanner } from '../qr/useQrScanner'
 import { usePosSession } from './usePosSession'
 import { PRODUCT_CATEGORIES, subscribeToProducts } from '../products/productService'
@@ -113,6 +113,20 @@ function buildCustomizationPayload(template, customizationState) {
   return { includedIngredients, removedIngredients, extras }
 }
 
+function buildPersonSearchText(person) {
+  return [
+    person.displayName,
+    person.internalId,
+    person.team,
+    person.shibboleth,
+    person.assignedQrId,
+    person.qrCodeId,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
 const ProductTile = memo(({ product, onClick, disabled }) => (
   <button
     type="button"
@@ -150,8 +164,10 @@ export function StaffPosPanel({ eventId }) {
   const [customizationState, setCustomizationState] = useState(null)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [selectionPending, setSelectionPending] = useState(false)
+  const [finalizePending, setFinalizePending] = useState(false)
+  const [cancelPending, setCancelPending] = useState(false)
   const [basketSyncing, setBasketSyncing] = useState(false)
-  const [pending, setPending] = useState(false)
   const performSwitchToPersonRef = useRef(async () => {})
   const cancelBasketHandlerRef = useRef(async () => {})
   const finalizeBasketHandlerRef = useRef(async () => {})
@@ -159,7 +175,6 @@ export function StaffPosPanel({ eventId }) {
   const abandonmentTimeoutRef = useRef(null)
   const shouldCancelAfterReturnRef = useRef(false)
   const basketSyncTimerRef = useRef(null)
-  const basketRenderFrameRef = useRef(null)
   const basketDirtyRef = useRef(false)
   const latestBasketItemsRef = useRef([])
   const committedBasketItemsRef = useRef([])
@@ -175,6 +190,27 @@ export function StaffPosPanel({ eventId }) {
 
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const sessionId = useMemo(() => getStaffSessionId(), [])
+  const peopleSearchIndex = useMemo(() => (
+    people.map((person) => ({
+      person,
+      searchText: buildPersonSearchText(person),
+    }))
+  ), [people])
+  const peopleByQrCode = useMemo(() => {
+    const index = new Map()
+
+    people.forEach((person) => {
+      if (person.assignedQrId) {
+        index.set(person.assignedQrId, person)
+      }
+
+      if (person.qrCodeId) {
+        index.set(person.qrCodeId, person)
+      }
+    })
+
+    return index
+  }, [people])
   const staffName = account?.displayName || user?.displayName || user?.email || 'Staff eszköz'
 
   useEffect(() => {
@@ -197,12 +233,11 @@ export function StaffPosPanel({ eventId }) {
   const filteredPeople = useMemo(() => {
     const normalizedQuery = deferredSearchQuery.trim().toLowerCase()
     if (!normalizedQuery) return []
-    return people.filter((person) => {
+    return peopleSearchIndex.filter(({ person, searchText }) => {
       if (displayedPerson?.id === person.id) return false
-      const haystack = `${person.displayName} ${person.internalId} ${person.team || ''} ${person.shibboleth || ''}`.toLowerCase()
-      return haystack.includes(normalizedQuery)
-    }).slice(0, 20)
-  }, [deferredSearchQuery, displayedPerson, people])
+      return searchText.includes(normalizedQuery)
+    }).map(({ person }) => person).slice(0, 20)
+  }, [deferredSearchQuery, displayedPerson, peopleSearchIndex])
 
   const availableProducts = useMemo(() => {
     const visibleProducts = products
@@ -257,6 +292,8 @@ export function StaffPosPanel({ eventId }) {
   const basketSummary = useMemo(() => summarizeBasketItems(basketItems), [basketItems])
   const shouldShowSearchResults = searchQuery.trim().length >= 2
   const displayedBasketSummary = isSwitchingPerson ? EMPTY_BASKET_SUMMARY : basketSummary
+  const blockingBasketAction = selectionPending || finalizePending || cancelPending
+  const productsDisabled = !selectedPerson || blockingBasketAction
 
   selectedPersonRef.current = selectedPerson
   activeBasketSnapshotRef.current = {
@@ -264,6 +301,23 @@ export function StaffPosPanel({ eventId }) {
     itemCount: basketSummary.itemCount,
     canFinalize: basketSummary.itemCount > 0,
     isSyncing: basketSyncing,
+  }
+
+  async function resolvePersonFromQr(rawValue) {
+    let normalizedQr = ''
+
+    try {
+      normalizedQr = normalizeQrInput(rawValue)
+    } catch {
+      return findPersonByQr(eventId, rawValue)
+    }
+
+    const cachedPerson = peopleByQrCode.get(normalizedQr)
+    if (cachedPerson) {
+      return cachedPerson
+    }
+
+    return findPersonByQr(eventId, normalizedQr)
   }
 
   const { videoRef, scannerSupported } = useQrScanner({
@@ -276,29 +330,23 @@ export function StaffPosPanel({ eventId }) {
       }
 
       setCameraOpen(false)
+      setSelectionPending(true)
+      setErrorMessage('')
 
-      await runAction(async () => {
-        const person = await findPersonByQr(eventId, normalizedQr)
+      try {
+        const person = await resolvePersonFromQr(normalizedQr)
         await performSwitchToPersonRef.current(person)
-      })
+      } catch (error) {
+        setErrorMessage(error.message)
+      } finally {
+        setSelectionPending(false)
+      }
     },
     onError: (error) => {
       setCameraOpen(false)
       setErrorMessage(error.message || 'A kamerás QR-beolvasás nem érhető el ezen az eszközön.')
     },
   })
-
-  async function runAction(action) {
-    setPending(true)
-    setErrorMessage('')
-    try {
-      await action()
-    } catch (error) {
-      setErrorMessage(error.message)
-    } finally {
-      setPending(false)
-    }
-  }
 
   const clearBasketSyncTimer = useCallback(() => {
     if (basketSyncTimerRef.current) {
@@ -307,35 +355,8 @@ export function StaffPosPanel({ eventId }) {
     }
   }, [])
 
-  const clearBasketRenderFrame = useCallback(() => {
-    if (basketRenderFrameRef.current) {
-      window.cancelAnimationFrame(basketRenderFrameRef.current)
-      basketRenderFrameRef.current = null
-    }
-  }, [])
-
-  const scheduleBasketRender = useCallback(() => {
-    if (typeof window === 'undefined') {
-      setBasketItems(latestBasketItemsRef.current)
-      return
-    }
-
-    if (basketRenderFrameRef.current) {
-      return
-    }
-
-    basketRenderFrameRef.current = window.requestAnimationFrame(() => {
-      basketRenderFrameRef.current = null
-      const nextItems = latestBasketItemsRef.current
-      startTransition(() => {
-        setBasketItems(nextItems)
-      })
-    })
-  }, [])
-
   function resetBasketDraft(items = []) {
     clearBasketSyncTimer()
-    clearBasketRenderFrame()
     basketDirtyRef.current = false
     latestBasketItemsRef.current = items
     committedBasketItemsRef.current = items
@@ -355,10 +376,34 @@ export function StaffPosPanel({ eventId }) {
     setBasketItems(nextItems)
   }
 
-  async function flushBasketDraft() {
+  function getCurrentBasketSnapshot() {
+    return {
+      person: selectedPersonRef.current,
+      items: latestBasketItemsRef.current,
+      committedItems: committedBasketItemsRef.current,
+      dirty: basketDirtyRef.current,
+      syncing: basketSyncing,
+    }
+  }
+
+  function restoreBasketSnapshot(snapshot) {
+    clearBasketSyncTimer()
+    basketDirtyRef.current = snapshot.dirty
+    latestBasketItemsRef.current = snapshot.items
+    committedBasketItemsRef.current = snapshot.committedItems
+    setSelectedPerson(snapshot.person)
+    setBasketItems(snapshot.items)
+    setBasketSyncing(snapshot.syncing)
+
+    if (snapshot.dirty) {
+      scheduleBasketSync()
+    }
+  }
+
+  async function flushBasketDraft(targetPerson = selectedPersonRef.current) {
     clearBasketSyncTimer()
 
-    const person = selectedPersonRef.current
+    const person = targetPerson
 
     if (!person || !basketDirtyRef.current) {
       return
@@ -366,7 +411,7 @@ export function StaffPosPanel({ eventId }) {
 
     if (activeBasketSaveRef.current) {
       await activeBasketSaveRef.current
-      return flushBasketDraft()
+      return flushBasketDraft(person)
     }
 
     const itemsToPersist = latestBasketItemsRef.current
@@ -425,36 +470,47 @@ export function StaffPosPanel({ eventId }) {
   const applyOptimisticBasketItems = useCallback((nextItems) => {
     basketDirtyRef.current = true
     latestBasketItemsRef.current = nextItems
-    scheduleBasketRender()
+    setBasketItems(nextItems)
     setBasketSyncing(true)
     scheduleBasketSync()
-  }, [scheduleBasketRender, scheduleBasketSync])
+  }, [scheduleBasketSync])
 
   async function performSwitchToPerson(nextPerson) {
     const previousPerson = selectedPersonRef.current
     const currentItemCount = latestBasketItemsRef.current.reduce((sum, item) => sum + item.quantity, 0)
+    const previousSnapshot = getCurrentBasketSnapshot()
+    let previousResolved = false
 
     setSwitchTargetPerson(nextPerson)
     setSearchQuery('')
-
-    if (previousPerson) {
-      if (currentItemCount > 0) {
-        await flushBasketDraft()
-        await finalizeBasket({ eventId, personId: previousPerson.id, staffUid: user.uid, sessionId, staffName })
-      } else {
-        clearBasketSyncTimer()
-        if (activeBasketSaveRef.current) {
-          await activeBasketSaveRef.current.catch(() => {})
-        }
-        await cancelBasket({ eventId, personId: previousPerson.id, staffUid: user.uid, sessionId })
-      }
-
-      clearSelectedBasketState()
-    }
+    setErrorMessage('')
 
     try {
+      if (previousPerson) {
+        if (currentItemCount > 0) {
+          await flushBasketDraft()
+          await finalizeBasket({ eventId, personId: previousPerson.id, staffUid: user.uid, sessionId, staffName })
+        } else {
+          clearBasketSyncTimer()
+          if (activeBasketSaveRef.current) {
+            await activeBasketSaveRef.current.catch(() => {})
+          }
+          await cancelBasket({ eventId, personId: previousPerson.id, staffUid: user.uid, sessionId })
+        }
+
+        clearSelectedBasketState()
+        previousResolved = true
+      }
+
       const lockedBasket = await acquireBasketLock({ eventId, person: nextPerson, staffUid: user.uid, sessionId, staffName })
       loadSelectedBasket(nextPerson, lockedBasket.items || [])
+    } catch (error) {
+      if (previousResolved) {
+        clearSelectedBasketState()
+      } else {
+        restoreBasketSnapshot(previousSnapshot)
+      }
+      throw error
     } finally {
       setSwitchTargetPerson(null)
     }
@@ -464,29 +520,65 @@ export function StaffPosPanel({ eventId }) {
 
   async function switchToPerson(nextPerson) {
     if (displayedPerson?.id === nextPerson.id) return
+    setSelectionPending(true)
     setSearchQuery('')
-    await runAction(() => performSwitchToPerson(nextPerson))
+
+    try {
+      await performSwitchToPerson(nextPerson)
+    } catch (error) {
+      setErrorMessage(error.message)
+    } finally {
+      setSelectionPending(false)
+    }
   }
 
   async function handleFinalizeCurrentBasket() {
-    if (!selectedPerson || basketSummary.itemCount === 0) return
-    await runAction(async () => {
-      await flushBasketDraft()
-      await finalizeBasket({ eventId, personId: selectedPerson.id, staffUid: user.uid, sessionId, staffName })
-      clearSelectedBasketState()
-    })
+    const person = selectedPersonRef.current
+    const snapshot = getCurrentBasketSnapshot()
+    const snapshotSummary = summarizeBasketItems(snapshot.items)
+
+    if (!person || snapshotSummary.itemCount === 0 || finalizePending) return
+
+    setFinalizePending(true)
+    setErrorMessage('')
+    setSelectedPerson(null)
+    setBasketItems([])
+    setBasketSyncing(false)
+
+    try {
+      await flushBasketDraft(person)
+      await finalizeBasket({ eventId, personId: person.id, staffUid: user.uid, sessionId, staffName })
+      resetBasketDraft([])
+    } catch (error) {
+      restoreBasketSnapshot(snapshot)
+      setErrorMessage(error.message)
+      throw error
+    } finally {
+      setFinalizePending(false)
+    }
   }
 
   async function handleCancelCurrentBasket() {
-    if (!selectedPerson) return
-    await runAction(async () => {
+    const person = selectedPersonRef.current
+
+    if (!person || cancelPending) return
+
+    setCancelPending(true)
+    setErrorMessage('')
+
+    try {
       clearBasketSyncTimer()
       if (activeBasketSaveRef.current) {
         await activeBasketSaveRef.current.catch(() => {})
       }
-      await cancelBasket({ eventId, personId: selectedPerson.id, staffUid: user.uid, sessionId })
+      await cancelBasket({ eventId, personId: person.id, staffUid: user.uid, sessionId })
       clearSelectedBasketState()
-    })
+    } catch (error) {
+      setErrorMessage(error.message)
+      throw error
+    } finally {
+      setCancelPending(false)
+    }
   }
 
   async function cancelCurrentBasketForAbandonment(message) {
@@ -534,11 +626,20 @@ export function StaffPosPanel({ eventId }) {
 
     if (existingIndex >= 0) {
       const parentLine = currentItems[existingIndex]
+      let drsFound = false
       const nextItems = currentItems.map((item) => {
         if (item.lineId === parentLine.lineId) return { ...item, quantity: item.quantity + 1 }
-        if (item.lineType === 'drs' && item.parentLineId === parentLine.lineId) return { ...item, quantity: item.quantity + 1 }
+        if (item.lineType === 'drs' && item.parentLineId === parentLine.lineId) {
+          drsFound = true
+          return { ...item, quantity: item.quantity + 1 }
+        }
         return item
       })
+
+      if (!drsFound && product.isDRS) {
+        nextItems.push(buildDrsLine({ parentLineId: parentLine.lineId }))
+      }
+
       applyOptimisticBasketItems(nextItems)
     } else {
       const newLine = buildBasketLine({ product, customization })
@@ -571,15 +672,14 @@ export function StaffPosPanel({ eventId }) {
 
   function updateBasketLine(lineId, updater) {
     if (!selectedPersonRef.current) return
-    const nextItems = latestBasketItemsRef.current
+    const currentItems = latestBasketItemsRef.current
+    const nextItems = currentItems
       .map((item) => {
         if (item.lineId !== lineId) {
           return item
         }
-        if (item.lineType === 'drs') {
-          return item
-        }
-        return updater(item)
+        const updated = updater(item)
+        return { ...updated, quantity: Math.max(0, updated.quantity) }
       })
       .map((item, _, allItems) => {
         if (item.lineType === 'drs') {
@@ -587,11 +687,25 @@ export function StaffPosPanel({ eventId }) {
           if (!parentLine || parentLine.quantity <= 0) {
             return { ...item, quantity: 0 }
           }
-          return { ...item, quantity: parentLine.quantity }
+
+          // If we manually updated the DRS line, respect the change but cap it at the parent's quantity
+          if (item.lineId === lineId) {
+            return { ...item, quantity: Math.min(item.quantity, parentLine.quantity) }
+          }
+
+          // If the parent line was the one updated, sync the DRS line to match the parent's new quantity
+          if (parentLine.lineId === lineId) {
+            return { ...item, quantity: parentLine.quantity }
+          }
         }
         return item
       })
-      .filter((item) => item.quantity > 0)
+      .filter((item, _, allItems) => {
+        if (item.lineType === 'drs') {
+          return allItems.some((p) => p.lineId === item.parentLineId && p.quantity > 0)
+        }
+        return item.quantity > 0
+      })
     applyOptimisticBasketItems(nextItems)
   }
 
@@ -603,9 +717,8 @@ export function StaffPosPanel({ eventId }) {
   useEffect(() => {
     return () => {
       clearBasketSyncTimer()
-      clearBasketRenderFrame()
     }
-  }, [clearBasketRenderFrame, clearBasketSyncTimer])
+  }, [clearBasketSyncTimer])
 
   useEffect(() => {
     if (!selectedPerson) {
@@ -781,7 +894,7 @@ export function StaffPosPanel({ eventId }) {
                   type="button"
                   className={`record-row${displayedPerson?.id === person.id ? ' selected' : ''}`}
                   onClick={() => switchToPerson(person)}
-                  disabled={pending}
+                  disabled={selectionPending || finalizePending || cancelPending}
                 >
                   <span>
                     <strong>{person.displayName}</strong>
@@ -838,16 +951,16 @@ export function StaffPosPanel({ eventId }) {
                   <span className="receipt-dots" />
                   <span className="receipt-qty-price">{item.quantity}x</span>
                   <span className="receipt-line-price">{formatHuf(item.lineTotal)}</span>
-                  {!isDrsLine ? (
-                    <div className="receipt-controls">
-                      <button
-                        type="button"
-                        className="receipt-btn"
-                        onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity - 1 }))}
-                        aria-label="Remove one"
-                      >
-                        -
-                      </button>
+                  <div className="receipt-controls">
+                    <button
+                      type="button"
+                      className="receipt-btn"
+                      onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity - 1 }))}
+                      aria-label="Remove one"
+                    >
+                      -
+                    </button>
+                    {!(isDrsLine && item.quantity >= (displayedBasketSummary.items.find((p) => p.lineId === item.parentLineId)?.quantity || 0)) && (
                       <button
                         type="button"
                         className="receipt-btn"
@@ -856,8 +969,8 @@ export function StaffPosPanel({ eventId }) {
                       >
                         +
                       </button>
-                    </div>
-                  ) : null}
+                    )}
+                  </div>
                 </div>
               )
             })}
@@ -901,18 +1014,18 @@ export function StaffPosPanel({ eventId }) {
               <button
                 type="button"
                 className="secondary-button pos-cart-delete-btn"
-                onClick={handleCancelCurrentBasket}
-                disabled={pending || !selectedPerson}
+                onClick={() => handleCancelCurrentBasket().catch(() => {})}
+                disabled={cancelPending || finalizePending || selectionPending || !selectedPerson}
               >
                 Törlés
               </button>
               <button
                 type="button"
                 className="primary-button pos-cart-finalize-btn"
-                onClick={handleFinalizeCurrentBasket}
-                disabled={pending || displayedBasketSummary.itemCount === 0}
+                onClick={() => handleFinalizeCurrentBasket().catch(() => {})}
+                disabled={finalizePending || cancelPending || selectionPending || displayedBasketSummary.itemCount === 0}
               >
-                {pending ? 'Folyamatban...' : 'Lezárás'}
+                {finalizePending ? 'Folyamatban...' : 'Lezárás'}
               </button>
             </div>
           </div>
@@ -960,7 +1073,7 @@ export function StaffPosPanel({ eventId }) {
         <div className="product-grid-scroll">
           <div
             className="product-category-list"
-            style={{ opacity: !displayedPerson ? 0.45 : 1, pointerEvents: !displayedPerson ? 'none' : 'auto' }}
+            style={{ opacity: productsDisabled ? 0.45 : 1, pointerEvents: productsDisabled ? 'none' : 'auto' }}
           >
             {groupedProducts.map((group) => (
               <section key={group.category} className="product-category-section">
@@ -973,7 +1086,7 @@ export function StaffPosPanel({ eventId }) {
                       key={product.id}
                       product={product}
                       onClick={startCustomization}
-                      disabled={pending || !selectedPerson}
+                      disabled={productsDisabled}
                     />
                   ))}
                 </div>

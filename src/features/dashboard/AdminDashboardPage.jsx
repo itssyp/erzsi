@@ -120,6 +120,7 @@ export function AdminDashboardPage() {
         <AuditLogPanel
           eventId={activeEventId}
           activeEventId={activeEventId}
+          actorUid={user?.uid}
           showEventSelector
         />
       ),

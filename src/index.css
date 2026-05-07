@@ -2444,6 +2444,151 @@ textarea:disabled {
   opacity: 0.5;
 }
 
+.audit-refund-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+  white-space: nowrap;
+}
+
+.audit-refund-btn:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.audit-refund-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.audit-refund-confirm > span {
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.audit-refund-confirm-btn {
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+
+.audit-refund-confirm-btn:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.audit-refund-confirm-btn.yes {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.audit-refund-confirm-btn.yes:hover {
+  background: var(--danger-soft);
+}
+
+/* ── QR pool rows ── */
+.qr-pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.qr-pool-row {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid transparent;
+  transition: border-color var(--t-fast);
+}
+
+.qr-pool-row.expanded {
+  border-color: var(--border);
+}
+
+.qr-pool-row-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.qr-pool-row:not(.expanded) .qr-pool-row-main:hover {
+  background: var(--bg);
+}
+
+.qr-pool-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.qr-pool-row-info strong {
+  font-family: 'Courier New', monospace;
+  font-size: 0.82rem;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+
+.qr-pool-row-info small {
+  font-size: 0.68rem;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.qr-pool-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.qr-inline-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 8px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+.qr-inline-code {
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.audit-refund-error {
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
 .audit-pagination {
   display: flex;
   align-items: center;

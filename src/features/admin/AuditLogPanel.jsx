@@ -3,6 +3,8 @@ import { subscribeToAuditLogs } from '../audit/auditService'
 import { subscribeToPeople } from '../people/personService'
 import { subscribeToAccountsDirectory } from '../auth/accountService'
 import { subscribeToEventsList } from '../events/eventService'
+import { refundOrder } from '../orders/orderService'
+import { AUDIT_TYPES } from '../audit/auditModels'
 
 const DEFAULT_LOGS_PER_PAGE = 25
 const PAGE_SIZE_OPTIONS = [25, 50, 100]
@@ -96,7 +98,7 @@ function getEventStatus(event, activeEventId) {
   return event.status || 'draft'
 }
 
-export function AuditLogPanel({ eventId: defaultEventId, activeEventId, showEventSelector = false }) {
+export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid, showEventSelector = false }) {
   const [logs, setLogs] = useState([])
   const [people, setPeople] = useState([])
   const [accounts, setAccounts] = useState([])
@@ -107,8 +109,25 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, showEven
   const [pageSize, setPageSize] = useState(DEFAULT_LOGS_PER_PAGE)
   const [page, setPage] = useState(1)
   const [errorMessage, setErrorMessage] = useState('')
+  const [refundConfirmId, setRefundConfirmId] = useState(null)
+  const [refundPendingId, setRefundPendingId] = useState(null)
+  const [refundError, setRefundError] = useState(null)
 
   const eventId = showEventSelector ? selectedEventId : defaultEventId
+
+  async function handleRefund(log) {
+    if (!eventId || !log.targetId || !actorUid) return
+    setRefundPendingId(log.id)
+    setRefundConfirmId(null)
+    setRefundError(null)
+    try {
+      await refundOrder({ eventId, orderId: log.targetId, actorUid })
+    } catch (error) {
+      setRefundError({ id: log.id, message: error.message })
+    } finally {
+      setRefundPendingId(null)
+    }
+  }
 
   useEffect(() => {
     if (!showEventSelector) return () => {}
@@ -248,7 +267,12 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, showEven
                 const ts = formatTimestampParts(log.createdAt)
                 const variant = getTypeVariant(log.type)
 
-                return (
+                const isOrderLog = log.type === AUDIT_TYPES.orderFinalization && log.targetId
+              const isConfirming = refundConfirmId === log.id
+              const isPending = refundPendingId === log.id
+              const rowError = refundError?.id === log.id ? refundError.message : null
+
+              return (
                   <article key={log.id} className="audit-row">
                     <time className="audit-ts" title={formatTimestamp(log.createdAt)}>
                       <span>{ts.time}</span>
@@ -260,7 +284,41 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, showEven
                           <span className={`audit-type audit-type-${variant}`}>{log.type}</span>
                         ) : null}
                         <span className="audit-summary">{buildReadableSummary(log, peopleById)}</span>
+                        {isOrderLog && !isConfirming && !isPending ? (
+                          <button
+                            type="button"
+                            className="audit-refund-btn"
+                            onClick={() => { setRefundConfirmId(log.id); setRefundError(null) }}
+                          >
+                            Refund
+                          </button>
+                        ) : null}
+                        {isOrderLog && isConfirming ? (
+                          <span className="audit-refund-confirm">
+                            <span>Are you sure?</span>
+                            <button
+                              type="button"
+                              className="audit-refund-confirm-btn yes"
+                              onClick={() => handleRefund(log)}
+                            >
+                              Yes, refund
+                            </button>
+                            <button
+                              type="button"
+                              className="audit-refund-confirm-btn"
+                              onClick={() => setRefundConfirmId(null)}
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : null}
+                        {isPending ? (
+                          <span className="helper-text" style={{ fontSize: '0.75rem' }}>Refunding…</span>
+                        ) : null}
                       </div>
+                      {rowError ? (
+                        <span className="audit-refund-error">{rowError}</span>
+                      ) : null}
                       <div className="audit-trail">
                         {actorLabel ? <span>{actorLabel}</span> : null}
                         {targetLabel && targetLabel !== '-' ? (

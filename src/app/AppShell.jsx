@@ -94,6 +94,8 @@ export function AppShell() {
     try {
       await action()
       return true
+    } catch {
+      return false
     } finally {
       setActionPending(false)
     }
