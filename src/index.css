@@ -1308,6 +1308,33 @@ textarea:disabled {
   text-align: right;
 }
 
+.receipt-line-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.receipt-custom-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.basket-mod {
+  font-size: 0.80em;
+  padding: 1px 0 1px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.basket-mod--removed {
+  color: var(--danger);
+}
+
+.basket-mod--extra {
+  color: var(--success);
+}
+
 .receipt-controls {
   display: flex;
   gap: 3px;
@@ -5819,4 +5846,402 @@ textarea:disabled {
 .user-qr-claim-btn {
   font-size: 0.875rem;
   padding: 8px 20px;
+}
+
+/* ── Fun Mode ──────────────────────────────────────────────────────────── */
+@property --fun-hue {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 5;
+}
+
+@keyframes funHueSpin {
+  from { --fun-hue: 0; }
+  to   { --fun-hue: 360; }
+}
+
+.fun-mode {
+  --fun-hue: 5;
+  --primary: hsl(var(--fun-hue), 80%, 42%);
+  --primary-hover: hsl(var(--fun-hue), 80%, 36%);
+  --primary-light: hsl(var(--fun-hue), 90%, 94%);
+  animation: funHueSpin 6s linear infinite;
+}
+
+.fun-mode .primary-button:not(:disabled) {
+  background: hsl(var(--fun-hue), 80%, 45%);
+  border-color: hsl(var(--fun-hue), 80%, 38%);
+}
+.fun-mode .primary-button:not(:disabled):hover {
+  background: hsl(var(--fun-hue), 80%, 38%);
+}
+
+.fun-mode .category-btn.active {
+  background: hsl(var(--fun-hue), 70%, 92%);
+  color: hsl(var(--fun-hue), 80%, 35%);
+  border-color: hsl(var(--fun-hue), 60%, 72%);
+}
+
+.fun-mode .product-tile:hover {
+  border-color: hsl(var(--fun-hue), 70%, 62%);
+  box-shadow: 0 0 0 2px hsl(var(--fun-hue), 70%, 82%);
+}
+
+/* Rainbow outline on workload panel acts as fun-mode indicator */
+.fun-mode .pos-workload-mini {
+  outline: 2.5px solid hsl(var(--fun-hue), 70%, 52%);
+  outline-offset: 2px;
+  border-radius: var(--radius-lg);
+}
+
+/* ── Burger Catch Game ─────────────────────────────────────────────────── */
+.game-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  background: #0e1117;
+  color: #fff;
+  font-family: inherit;
+  overflow: hidden;
+}
+
+/* Header */
+.game-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+  flex-shrink: 0;
+}
+
+.game-cancel-btn {
+  background: rgba(255,255,255,0.10);
+  border: none;
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  transition: background var(--t-fast);
+}
+.game-cancel-btn:hover { background: rgba(255,255,255,0.18); }
+
+.game-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+}
+
+.game-pdot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.20);
+  border: 2px solid rgba(255,255,255,0.35);
+  transition: background 0.25s, border-color 0.25s, transform 0.18s;
+  display: inline-block;
+}
+.game-pdot.caught {
+  background: #4ade80;
+  border-color: #22c55e;
+  transform: scale(1.25);
+}
+.game-pdot--patty.caught  { background: #f97316; border-color: #ea580c; }
+.game-pdot--cheese.caught { background: #facc15; border-color: #eab308; }
+.game-pdot--lettuce.caught{ background: #4ade80; border-color: #22c55e; }
+.game-pdot--tomato.caught { background: #f87171; border-color: #ef4444; }
+.game-pdot--onion.caught  { background: #c084fc; border-color: #a855f7; }
+.game-pdot--bacon.caught  { background: #fb923c; border-color: #f97316; }
+.game-pdot--sauce.caught  { background: #f87171; border-color: #ef4444; }
+
+.game-score {
+  font-size: 0.88rem;
+  font-weight: 600;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+/* Field */
+.game-field {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: linear-gradient(180deg, #13171f 0%, #1c2230 100%);
+  cursor: none;
+  user-select: none;
+  touch-action: none;
+}
+
+.game-items-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Falling items */
+.catch-item {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 88px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  filter: drop-shadow(0 3px 8px rgba(0,0,0,0.55));
+}
+
+/* Burger layers inside falling catch items — base sizes */
+.catch-item .burger-layer-sprite {
+  /* Per-kind heights still apply (same or lower specificity depending on kind rule);
+     this just ensures a fallback size in case height collapses. */
+  min-height: 18px;
+  /* White top highlight makes dark sprites (patty, bacon) visible on dark game bg */
+  box-shadow:
+    inset 0 4px 0 rgba(255,255,255,0.18),
+    inset 0 -3px 0 rgba(0,0,0,0.20),
+    0 2px 8px rgba(0,0,0,0.35);
+}
+
+.catch-item-label {
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255,255,255,0.80);
+  background: rgba(0,0,0,0.50);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+/* 'default' kind: name pill displayed inside the falling item (no sprite) */
+.catch-item-label--inside {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: rgba(255,255,255,0.14);
+  border: 1.5px solid rgba(255,255,255,0.28);
+  border-radius: 8px;
+  padding: 6px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+}
+
+/* Optional extra items get a subtle gold glow to distinguish them */
+.catch-item--extra .burger-layer-sprite,
+.catch-item--extra .catch-item-label--inside {
+  box-shadow:
+    inset 0 4px 0 rgba(255,255,255,0.18),
+    inset 0 -3px 0 rgba(0,0,0,0.20),
+    0 0 8px 2px rgba(255,200,50,0.45),
+    0 2px 8px rgba(0,0,0,0.35);
+}
+
+/* Catch flash */
+@keyframes catchFlash {
+  0%   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1.1); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-32px) scale(0.7); }
+}
+.catch-flash {
+  position: absolute;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #4ade80;
+  transform: translateX(-50%);
+  animation: catchFlash 0.45s ease-out forwards;
+  pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+}
+.catch-flash::after { content: '+1'; }
+
+/* Done button */
+.game-done-btn {
+  background: #16a34a;
+  border: none;
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  transition: background var(--t-fast), opacity var(--t-fast);
+  flex-shrink: 0;
+}
+.game-done-btn:hover:not(:disabled) { background: #15803d; }
+.game-done-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* Falling top bun — uses actual burger-bun CSS sprite */
+@keyframes topBunPulse {
+  0%, 100% { filter: drop-shadow(0 0 8px rgba(250,204,21,0.5)); }
+  50%       { filter: drop-shadow(0 0 18px rgba(250,204,21,1.0)); }
+}
+.catch-item--top-bun {
+  width: 110px;
+  animation: topBunPulse 0.85s ease-in-out infinite;
+}
+.catch-item--top-bun .burger-bun {
+  width: 100%;
+  height: 36px;
+  pointer-events: none;
+}
+
+/* Paddle — flex-column so the burger tower stacks upward from the bun */
+.game-paddle {
+  position: absolute;
+  bottom: 10%;
+  transform: translateX(-50%);
+  width: 20%;          /* narrower bun = tighter catch zone */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  transition: left 0ms;
+}
+
+/* Burger tower sitting on top of the bottom bun, growing upward */
+.game-burger-tower {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+/* Top bun landing on the completed burger */
+@keyframes topBunLand {
+  from { opacity: 0; transform: translateY(-20px) scaleX(0.75); }
+  to   { opacity: 1; transform: translateY(0) scaleX(1); }
+}
+.game-tower-top-bun {
+  width: 100%;
+  pointer-events: none;
+  animation: topBunLand 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.game-tower-top-bun span {
+  width: 88%;
+}
+
+/* Each caught ingredient pops onto the tower */
+@keyframes layerSlideIn {
+  from { opacity: 0; transform: scaleX(0.65) scaleY(0.4); }
+  to   { opacity: 1; transform: scaleX(1)    scaleY(1); }
+}
+.game-caught-layer {
+  animation: layerSlideIn 0.20s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+/* White highlight so dark sprites pop on dark tower background */
+.game-caught-layer .burger-layer-sprite {
+  min-height: 14px;
+  box-shadow:
+    inset 0 4px 0 rgba(255,255,255,0.20),
+    inset 0 -3px 0 rgba(0,0,0,0.20),
+    0 1px 4px rgba(0,0,0,0.35);
+}
+
+/* Bottom bun — the paddle surface */
+.game-bun-bottom {
+  width: 100%;
+  height: 16px;
+  background: linear-gradient(180deg, #f5c842 0%, #d4931a 100%);
+  border-radius: 0 0 40px 40px / 0 0 16px 16px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.55), inset 0 -2px 4px rgba(255,255,255,0.15);
+  position: relative;
+}
+.game-bun-bottom::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: 0; right: 0;
+  height: 10px;
+  background: linear-gradient(180deg, #f5c842 0%, #e9b224 100%);
+  border-radius: 40px / 10px;
+  box-shadow: 0 -2px 6px rgba(0,0,0,0.3);
+}
+
+/* Countdown */
+.game-countdown {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: rgba(14,17,23,0.80);
+  z-index: 10;
+}
+
+@keyframes countdownPop {
+  0%   { transform: scale(0.4); opacity: 0; }
+  50%  { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+.game-countdown-num {
+  font-size: 6rem;
+  font-weight: 800;
+  line-height: 1;
+  animation: countdownPop 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  display: block;
+}
+
+.game-countdown-hint {
+  font-size: 0.82rem;
+  opacity: 0.60;
+  max-width: 280px;
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* Celebration */
+@keyframes celebrateIn {
+  0%   { opacity: 0; transform: scale(0.7) translateY(20px); }
+  70%  { transform: scale(1.06) translateY(-4px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes celebrateBounce {
+  0%, 100% { transform: translateY(0) rotate(-8deg); }
+  50%       { transform: translateY(-14px) rotate(8deg); }
+}
+
+.game-celebrate {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(14,17,23,0.78);
+  z-index: 10;
+  animation: celebrateIn 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.game-celebrate-icon {
+  font-size: 5rem;
+  line-height: 1;
+  animation: celebrateBounce 0.7s ease-in-out infinite;
+  display: block;
+}
+
+.game-celebrate-text {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #fff;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.5);
 }

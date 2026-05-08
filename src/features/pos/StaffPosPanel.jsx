@@ -29,6 +29,7 @@ import {
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { useKitchenWorkload } from '../kitchen/useKitchenWorkload'
 import { useActiveEvent } from '../events/useActiveEvent'
+import { BurgerCatchGame } from './BurgerCatchGame'
 
 const MISC_CATEGORY = 'Egyéb'
 const DRS_RETURN_PRODUCT = Object.freeze({
@@ -73,8 +74,8 @@ const BURGER_LAYER_ORDER = Object.freeze({
   onion: 25,
   bacon: 28,
   'cheese:extra': 30,
-  cheese: 40,
-  'patty:extra': 50,
+  'patty:extra': 40,
+  cheese: 50,
   patty: 60,
 })
 
@@ -240,7 +241,7 @@ function CustomizationExtras({ extras, onAdjustQuantity, onUpdateQuantity }) {
 
   return (
     <div className="stack-block customization-extra-list" style={{ gap: '8px' }}>
-      <h5 className="card-title" style={{ marginBottom: '4px' }}>ExtrÃ¡k</h5>
+      <h5 className="card-title" style={{ marginBottom: '4px' }}>Extrák</h5>
       {extras.map((extra) => (
         <div
           key={extra.id}
@@ -419,6 +420,9 @@ export function StaffPosPanel({ eventId }) {
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [customizingProduct, setCustomizingProduct] = useState(null)
   const [customizationState, setCustomizationState] = useState(null)
+  const [funModeActive, setFunModeActive] = useState(false)
+  const [burgerGameProduct, setBurgerGameProduct] = useState(null)
+  const funLongPressRef = useRef(null)
   const [spritzerGuideOpen, setSpritzerGuideOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -928,13 +932,20 @@ export function StaffPosPanel({ eventId }) {
 
   const startCustomization = useCallback((product) => {
     const template = modifierTemplates.find((entry) => entry.id === product.modifierTemplateId)
+
+    // Fun mode: burger products launch the catch game instead of the modal
+    if (funModeActive && template && isBurgerVisualTemplate(product, template)) {
+      setBurgerGameProduct({ product, template })
+      return
+    }
+
     if (!template) {
       addItemToBasket(product, null)
       return
     }
     setCustomizingProduct({ product, template })
     setCustomizationState(createCustomizationState(template))
-  }, [modifierTemplates, addItemToBasket])
+  }, [modifierTemplates, addItemToBasket, funModeActive])
 
   function handleConfirmCustomization() {
     if (!customizingProduct || !customizationState) return
@@ -1026,6 +1037,23 @@ export function StaffPosPanel({ eventId }) {
   function closeCustomization() {
     setCustomizingProduct(null)
     setCustomizationState(null)
+  }
+
+  function handleFunLongPressStart() {
+    funLongPressRef.current = setTimeout(() => {
+      funLongPressRef.current = null
+      setFunModeActive((prev) => {
+        if (prev) setBurgerGameProduct(null)
+        return !prev
+      })
+    }, 1500)
+  }
+
+  function handleFunLongPressEnd() {
+    if (funLongPressRef.current) {
+      clearTimeout(funLongPressRef.current)
+      funLongPressRef.current = null
+    }
   }
 
   useEffect(() => {
@@ -1166,7 +1194,7 @@ export function StaffPosPanel({ eventId }) {
   }, [clearActiveBasket, eventId, selectedPerson, sessionId, user.uid])
 
   return (
-    <div className="pos-screen-layout">
+    <div className={`pos-screen-layout${funModeActive ? ' fun-mode' : ''}`}>
       {/* LEFT COLUMN: Lookup + Basket */}
       <div className="pos-basket-area">
         <div className="pos-toolbar-area">
@@ -1251,40 +1279,58 @@ export function StaffPosPanel({ eventId }) {
             {displayedBasketSummary.items.map((item) => {
               const isDrsLine = item.lineType === 'drs'
               const isDrsReturnLine = item.lineType === 'drsReturn'
+              const removedIngredients = item.customization?.removedIngredients || []
+              const extraIngredients = (item.customization?.extras || []).filter((e) => e.quantity > 0)
+              const hasCustomization = removedIngredients.length > 0 || extraIngredients.length > 0
               return (
-                <div
-                  key={item.lineId}
-                  className={`receipt-line${isDrsLine ? ' receipt-line-drs' : ''}${isDrsReturnLine ? ' receipt-line-credit' : ''}`}
-                >
-                  <span
-                    className="receipt-item-name"
-                    style={isDrsLine ? { color: 'var(--muted)', fontSize: '0.8em', paddingLeft: '10px' } : {}}
+                <div key={item.lineId} className="receipt-line-group">
+                  <div
+                    className={`receipt-line${isDrsLine ? ' receipt-line-drs' : ''}${isDrsReturnLine ? ' receipt-line-credit' : ''}`}
                   >
-                    {item.productName}
-                  </span>
-                  <span className="receipt-dots" />
-                  <span className="receipt-qty-price">{item.quantity}x</span>
-                  <span className="receipt-line-price">{formatHuf(item.lineTotal)}</span>
-                  <div className="receipt-controls">
-                    <button
-                      type="button"
-                      className="receipt-btn"
-                      onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity - 1 }))}
-                      aria-label="Remove one"
+                    <span
+                      className="receipt-item-name"
+                      style={isDrsLine ? { color: 'var(--muted)', fontSize: '0.8em', paddingLeft: '10px' } : {}}
                     >
-                      -
-                    </button>
-                    {!(isDrsLine && item.quantity >= (displayedBasketSummary.items.find((p) => p.lineId === item.parentLineId)?.quantity || 0)) && (
+                      {item.productName}
+                    </span>
+                    <span className="receipt-dots" />
+                    <span className="receipt-qty-price">{item.quantity}x</span>
+                    <span className="receipt-line-price">{formatHuf(item.lineTotal)}</span>
+                    <div className="receipt-controls">
                       <button
                         type="button"
                         className="receipt-btn"
-                        onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity + 1 }))}
-                        aria-label="Add one"
+                        onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity - 1 }))}
+                        aria-label="Remove one"
                       >
-                        +
+                        -
                       </button>
-                    )}
+                      {!(isDrsLine && item.quantity >= (displayedBasketSummary.items.find((p) => p.lineId === item.parentLineId)?.quantity || 0)) && (
+                        <button
+                          type="button"
+                          className="receipt-btn"
+                          onClick={() => updateBasketLine(item.lineId, (entry) => ({ ...entry, quantity: entry.quantity + 1 }))}
+                          aria-label="Add one"
+                        >
+                          +
+                        </button>
+                      )}
+                    </div>
                   </div>
+                  {hasCustomization ? (
+                    <div className="receipt-custom-row">
+                      {removedIngredients.length > 0 && (
+                        <span className="basket-mod basket-mod--removed">
+                          – {removedIngredients.map((i) => i.label).join(', ')}
+                        </span>
+                      )}
+                      {extraIngredients.length > 0 && (
+                        <span className="basket-mod basket-mod--extra">
+                          + {extraIngredients.map((e) => `${e.label}${e.quantity > 1 ? ` ×${e.quantity}` : ''}`).join(', ')}
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               )
             })}
@@ -1364,7 +1410,14 @@ export function StaffPosPanel({ eventId }) {
             ))}
           </div>
 
-          <div className={`pos-workload-mini ${workloadError ? 'workload-error-state' : workload.barClass}`}>
+          <div
+            className={`pos-workload-mini ${workloadError ? 'workload-error-state' : workload.barClass}`}
+            onPointerDown={handleFunLongPressStart}
+            onPointerUp={handleFunLongPressEnd}
+            onPointerLeave={handleFunLongPressEnd}
+            onContextMenu={(e) => e.preventDefault()}
+            style={{ userSelect: 'none', touchAction: 'none' }}
+          >
             <div className="workload-mini-left">
               <span className="workload-tag">Konyha</span>
               <span className="workload-level">{workloadError ? 'Hiba' : workload.label}</span>
@@ -1597,6 +1650,19 @@ export function StaffPosPanel({ eventId }) {
           </>
         )}
       </div>
+
+      {burgerGameProduct ? (
+        <BurgerCatchGame
+          product={burgerGameProduct.product}
+          template={burgerGameProduct.template}
+          onComplete={(customization) => {
+            const { product } = burgerGameProduct
+            setBurgerGameProduct(null)
+            addItemToBasket(product, customization)
+          }}
+          onCancel={() => setBurgerGameProduct(null)}
+        />
+      ) : null}
     </div>
   )
 }
