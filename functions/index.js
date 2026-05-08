@@ -32,6 +32,7 @@ const AUDIT_TYPES = {
   qrGeneration: 'qrGeneration',
   qrRevocation: 'qrRevocation',
   qrReset: 'qrReset',
+  eventChange: 'eventChange',
 }
 
 function normalizeRole(role) {
@@ -798,14 +799,22 @@ export const linkAccountToPersona = onCall(async (request) => {
 
     const person = personSnapshot.data()
 
+    // Read carryover in parallel with existing-link check (all reads before writes)
+    const personNormalizedShibboleth = person.normalizedShibboleth || normalizeShibbolethKey(person.shibboleth)
+    const readsToAwait = [
+      linkedAuthUid && targetEventLinkRef ? transaction.get(targetEventLinkRef) : Promise.resolve(null),
+      linkedAuthUid && personNormalizedShibboleth
+        ? transaction.get(getCarryoverBalanceRef(personNormalizedShibboleth))
+        : Promise.resolve(null),
+    ]
+    const [existingLinkSnapshot, carryoverSnapshot] = await Promise.all(readsToAwait)
+
     if (person.linkedAuthUid && person.linkedAuthUid !== linkedAuthUid) {
       transaction.delete(db.doc(`accounts/${person.linkedAuthUid}/eventLinks/${eventId}`))
     }
 
     if (linkedAuthUid && targetEventLinkRef) {
-      const existingLinkSnapshot = await transaction.get(targetEventLinkRef)
-
-      if (existingLinkSnapshot.exists && existingLinkSnapshot.data().personId !== personId) {
+      if (existingLinkSnapshot?.exists && existingLinkSnapshot.data().personId !== personId) {
         transaction.set(
           getPersonRef(eventId, existingLinkSnapshot.data().personId),
           buildPersonLinkPatch({ linkedAuthUid: null }),
@@ -825,7 +834,7 @@ export const linkAccountToPersona = onCall(async (request) => {
           team: person.team || '',
           attendeeType: person.attendeeType || null,
           shibboleth: person.shibboleth || '',
-          normalizedShibboleth: normalizeShibbolethKey(person.shibboleth),
+          normalizedShibboleth: personNormalizedShibboleth,
           linkedAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         },
@@ -836,7 +845,38 @@ export const linkAccountToPersona = onCall(async (request) => {
       transaction.delete(db.doc(`accounts/${person.linkedAuthUid}/eventLinks/${eventId}`))
     }
 
-    transaction.set(personRef, buildPersonLinkPatch({ linkedAuthUid }), { merge: true })
+    // Apply carryover balance if linking (not unlinking) and not already applied
+    const carryover = carryoverSnapshot?.exists ? carryoverSnapshot.data() : null
+    const carryoverBalance = Number.isFinite(carryover?.balance) ? carryover.balance : 0
+    const carryoverAlreadyApplied = Boolean(
+      carryover && person.carryoverAppliedFromEventId === carryover.sourceEventId,
+    )
+    const shouldApplyCarryover = linkedAuthUid && carryoverBalance !== 0 && carryover && !carryoverAlreadyApplied
+
+    const personPatch = buildPersonLinkPatch({ linkedAuthUid })
+    if (shouldApplyCarryover) {
+      const balanceBefore = Number.isFinite(person.balance) ? person.balance : 0
+      personPatch.balance = balanceBefore + carryoverBalance
+      personPatch.carryoverAppliedFromEventId = carryover.sourceEventId
+    }
+
+    transaction.set(personRef, personPatch, { merge: true })
+
+    if (shouldApplyCarryover) {
+      const balanceBefore = Number.isFinite(person.balance) ? person.balance : 0
+      const ledgerRef = db.collection(`${getEventPath(eventId)}/ledgerEntries`).doc()
+      transaction.set(ledgerRef, {
+        type: 'carryoverIn',
+        actorUid: authContext.uid,
+        personId,
+        amount: carryoverBalance,
+        balanceBefore,
+        balanceAfter: balanceBefore + carryoverBalance,
+        currency: 'HUF',
+        reason: `Carry-over from event ${carryover.sourceEventId || 'unknown'} (applied on admin link)`,
+        createdAt: FieldValue.serverTimestamp(),
+      })
+    }
 
     if (person.assignedQrId || person.qrCodeId) {
       const qrCode = person.assignedQrId || person.qrCodeId
@@ -904,6 +944,27 @@ export const closeEventAndCarryBalances = onCall(callableOptions, async (request
       .map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }))
       .filter((person) => person.recordStatus !== 'deleted')
 
+    // Collect unique normalized shibboleth values so we can read their existing
+    // carryover docs before writing. This lets us rescue any balance that was
+    // never applied to a persona in this event and would otherwise be overwritten.
+    const uniqueShibboleths = [
+      ...new Set(
+        activePeople
+          .map((p) => p.normalizedShibboleth || normalizeShibbolethKey(p.shibboleth))
+          .filter(Boolean),
+      ),
+    ]
+
+    const existingCarryoverSnaps = await Promise.all(
+      uniqueShibboleths.map((s) => transaction.get(getCarryoverBalanceRef(s))),
+    )
+    const existingCarryoverByShib = new Map()
+    uniqueShibboleths.forEach((shib, i) => {
+      if (existingCarryoverSnaps[i].exists) {
+        existingCarryoverByShib.set(shib, existingCarryoverSnaps[i].data())
+      }
+    })
+
     const missingShibboleth = []
     const peopleByShibboleth = new Map()
 
@@ -949,7 +1010,21 @@ export const closeEventAndCarryBalances = onCall(callableOptions, async (request
       const normalizedShibboleth = person.normalizedShibboleth || normalizeShibbolethKey(person.shibboleth)
       if (!normalizedShibboleth) return
 
-      const balance = Number.isFinite(person.balance) ? person.balance : 0
+      const personBalance = Number.isFinite(person.balance) ? person.balance : 0
+
+      // If there is an existing carryover from a previous event that was never
+      // applied to this persona, accumulate it so the money is not lost when
+      // we overwrite the carryover doc below.
+      const existingCarryover = existingCarryoverByShib.get(normalizedShibboleth)
+      const unappliedCarryover =
+        existingCarryover &&
+        existingCarryover.sourceEventId !== eventId &&
+        person.carryoverAppliedFromEventId !== existingCarryover.sourceEventId
+          ? (Number.isFinite(existingCarryover.balance) ? existingCarryover.balance : 0)
+          : 0
+
+      const balance = personBalance + unappliedCarryover
+
       carriedCount += 1
       totalBalance += balance
 
@@ -1051,11 +1126,16 @@ export const joinEventByShibboleth = onCall(callableOptions, async (request) => 
       }
     }
 
-    let matchingPeopleSnapshot = await transaction.get(
-      db.collection(`${getEventPath(eventId)}/people`)
-        .where('normalizedShibboleth', '==', normalizedShibboleth),
-    )
+    // Read people query and carryover balance in parallel (all reads before any writes)
+    const [matchingPeopleSnapshot1, carryoverSnapshot] = await Promise.all([
+      transaction.get(
+        db.collection(`${getEventPath(eventId)}/people`)
+          .where('normalizedShibboleth', '==', normalizedShibboleth),
+      ),
+      transaction.get(getCarryoverBalanceRef(normalizedShibboleth)),
+    ])
 
+    let matchingPeopleSnapshot = matchingPeopleSnapshot1
     if (matchingPeopleSnapshot.empty) {
       matchingPeopleSnapshot = await transaction.get(
         db.collection(`${getEventPath(eventId)}/people`)
@@ -1079,6 +1159,23 @@ export const joinEventByShibboleth = onCall(callableOptions, async (request) => 
 
     if (person.linkedAuthUid && person.linkedAuthUid !== authContext.uid) {
       throw new HttpsError('failed-precondition', 'This persona is already linked to another account. Find an organizer.')
+    }
+
+    // ── Carryover balance application ────────────────────────────────────
+    const carryover = carryoverSnapshot.exists ? carryoverSnapshot.data() : null
+    const carryoverBalance = Number.isFinite(carryover?.balance) ? carryover.balance : 0
+    // Guard against double-apply: import stamps carryoverAppliedFromEventId when it applies carryover
+    const carryoverAlreadyApplied = Boolean(
+      carryover && person.carryoverAppliedFromEventId === carryover.sourceEventId,
+    )
+    const shouldApplyCarryover = carryoverBalance !== 0 && carryover && !carryoverAlreadyApplied
+
+    // Build person patch — combine link + optional carryover into one write
+    const personPatch = buildPersonLinkPatch({ linkedAuthUid: authContext.uid })
+    if (shouldApplyCarryover) {
+      const balanceBefore = Number.isFinite(person.balance) ? person.balance : 0
+      personPatch.balance = balanceBefore + carryoverBalance
+      personPatch.carryoverAppliedFromEventId = carryover.sourceEventId
     }
 
     transaction.set(
@@ -1109,7 +1206,24 @@ export const joinEventByShibboleth = onCall(callableOptions, async (request) => 
       },
     )
 
-    transaction.set(getPersonRef(eventId, person.id), buildPersonLinkPatch({ linkedAuthUid: authContext.uid }), { merge: true })
+    transaction.set(getPersonRef(eventId, person.id), personPatch, { merge: true })
+
+    // Write ledger entry if carryover was applied now
+    if (shouldApplyCarryover) {
+      const balanceBefore = Number.isFinite(person.balance) ? person.balance : 0
+      const ledgerRef = db.collection(`${getEventPath(eventId)}/ledgerEntries`).doc()
+      transaction.set(ledgerRef, {
+        type: 'carryoverIn',
+        actorUid: authContext.uid,
+        personId: person.id,
+        amount: carryoverBalance,
+        balanceBefore,
+        balanceAfter: balanceBefore + carryoverBalance,
+        currency: 'HUF',
+        reason: `Carry-over from event ${carryover.sourceEventId || 'unknown'} (applied on join)`,
+        createdAt: FieldValue.serverTimestamp(),
+      })
+    }
 
     if (person.assignedQrId || person.qrCodeId) {
       const qrCode = person.assignedQrId || person.qrCodeId

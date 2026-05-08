@@ -122,14 +122,18 @@ async function importPeopleRows({ eventId, actorUid, acceptedRows, rejectedRows 
     const personRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.people)))
     const carryover = carryoverSnapshots[index]?.exists() ? carryoverSnapshots[index].data() : null
     const carryoverBalance = Number.isFinite(carryover?.balance) ? carryover.balance : 0
-    const personRecord = buildPersonRecord({
-      internalId: buildInternalPersonId(personRef.id),
-      displayName: row.displayName,
-      team: row.team,
-      attendeeType: row.attendeeType,
-      shibboleth: row.shibboleth,
-      balance: carryoverBalance,
-    })
+    const personRecord = {
+      ...buildPersonRecord({
+        internalId: buildInternalPersonId(personRef.id),
+        displayName: row.displayName,
+        team: row.team,
+        attendeeType: row.attendeeType,
+        shibboleth: row.shibboleth,
+        balance: carryoverBalance,
+      }),
+      // Stamp which event's carryover was applied so joinEventByShibboleth won't double-apply
+      ...(carryoverBalance !== 0 && carryover ? { carryoverAppliedFromEventId: carryover.sourceEventId } : {}),
+    }
 
     batch.set(personRef, personRecord)
     createdPeople.push({ personId: personRef.id, ...row, internalId: personRecord.internalId, carryoverBalance })
@@ -202,53 +206,87 @@ export async function updatePersonRecord({
   shibboleth,
 }) {
   const personRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.people, personId))
-  const personSnapshot = await getDoc(personRef)
+  const newNormalizedShibboleth = normalizeShibboleth(shibboleth)
 
-  if (!personSnapshot.exists()) {
-    throw new Error('Person record was not found.')
-  }
+  await runTransaction(db, async (transaction) => {
+    const personSnapshot = await transaction.get(personRef)
 
-  const currentPerson = personSnapshot.data()
-  const batch = writeBatch(db)
+    if (!personSnapshot.exists()) {
+      throw new Error('Person record was not found.')
+    }
 
-  batch.set(
-    personRef,
-    buildPersonUpdatePatch({ displayName, team, attendeeType, shibboleth }),
-    { merge: true },
-  )
+    const currentPerson = personSnapshot.data()
+    const oldNormalizedShibboleth = currentPerson.normalizedShibboleth || normalizeShibboleth(currentPerson.shibboleth || '')
 
-  if (currentPerson.linkedAuthUid) {
-    batch.set(
-      doc(db, getAccountEventLinkPath(currentPerson.linkedAuthUid, eventId)),
-      buildAccountEventLinkMetadataPatch({
-        personId,
+    // Only look up carryover when shibboleth is being set or changed to a new non-empty value
+    const shibbolethChanged = newNormalizedShibboleth && newNormalizedShibboleth !== oldNormalizedShibboleth
+    let carryover = null
+
+    if (shibbolethChanged) {
+      const carryoverRef = doc(db, getCarryoverBalancePath(newNormalizedShibboleth))
+      const carryoverSnapshot = await transaction.get(carryoverRef)
+      carryover = carryoverSnapshot.exists() ? carryoverSnapshot.data() : null
+    }
+
+    const carryoverBalance = Number.isFinite(carryover?.balance) ? carryover.balance : 0
+    const carryoverAlreadyApplied = Boolean(
+      carryover && currentPerson.carryoverAppliedFromEventId === carryover.sourceEventId,
+    )
+    const shouldApplyCarryover = shibbolethChanged && carryoverBalance !== 0 && carryover && !carryoverAlreadyApplied
+
+    // Build the update patch, optionally including balance + carryover stamp
+    const personPatch = buildPersonUpdatePatch({ displayName, team, attendeeType, shibboleth })
+    if (shouldApplyCarryover) {
+      const balanceBefore = Number.isFinite(currentPerson.balance) ? currentPerson.balance : 0
+      personPatch.balance = balanceBefore + carryoverBalance
+      personPatch.carryoverAppliedFromEventId = carryover.sourceEventId
+    }
+
+    transaction.set(personRef, personPatch, { merge: true })
+
+    if (currentPerson.linkedAuthUid) {
+      transaction.set(
+        doc(db, getAccountEventLinkPath(currentPerson.linkedAuthUid, eventId)),
+        buildAccountEventLinkMetadataPatch({ personId, displayName, team, attendeeType, shibboleth }),
+        { merge: true },
+      )
+    }
+
+    if (shouldApplyCarryover) {
+      const balanceBefore = Number.isFinite(currentPerson.balance) ? currentPerson.balance : 0
+      transaction.set(
+        doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.ledgerEntries))),
+        buildLedgerEntryRecord({
+          type: LEDGER_ENTRY_TYPES.carryoverIn,
+          actorUid,
+          personId,
+          amount: carryoverBalance,
+          balanceBefore,
+          balanceAfter: balanceBefore + carryoverBalance,
+          reason: `Carry-over from event ${carryover.sourceEventId || 'unknown'} (applied on shibboleth update)`,
+        }),
+      )
+    }
+
+    const auditLogWrite = createAuditLogWrite({
+      eventId,
+      type: AUDIT_TYPES.personUpdate,
+      actorUid,
+      summary: `Updated person ${displayName}`,
+      targetType: 'person',
+      targetId: personId,
+      personId,
+      details: {
         displayName,
         team,
         attendeeType,
         shibboleth,
-      }),
-      { merge: true },
-    )
-  }
+        ...(shouldApplyCarryover ? { carryoverApplied: carryoverBalance } : {}),
+      },
+    })
 
-  const auditLogWrite = createAuditLogWrite({
-    eventId,
-    type: AUDIT_TYPES.personUpdate,
-    actorUid,
-    summary: `Updated person ${displayName}`,
-    targetType: 'person',
-    targetId: personId,
-    personId,
-    details: {
-      displayName,
-      team,
-      attendeeType,
-      shibboleth,
-    },
+    transaction.set(auditLogWrite.ref, auditLogWrite.data)
   })
-
-  batch.set(auditLogWrite.ref, auditLogWrite.data)
-  await batch.commit()
 }
 
 export async function deletePersonRecord({ eventId, actorUid, personId }) {

@@ -1060,6 +1060,31 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     } catch { /* handled */ }
   }
 
+  function handleExportPersonas() {
+    if (visiblePeople.length === 0) {
+      setErrorMessage('No personas to export.')
+      return
+    }
+    try {
+      const rows = visiblePeople.map((person) => ({
+        Name: person.displayName || '',
+        Team: person.team || '',
+        Type: person.attendeeType || '',
+        Shibboleth: person.shibboleth || '',
+      }))
+      const sheet = XLSX.utils.json_to_sheet(rows, {
+        header: ['Name', 'Team', 'Type', 'Shibboleth'],
+      })
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, sheet, 'Personas')
+      const stamp = new Date().toISOString().slice(0, 10)
+      XLSX.writeFile(workbook, `personas-${eventId}-${stamp}.xlsx`)
+      setStatusMessage(`Exported ${rows.length} persona${rows.length === 1 ? '' : 's'}.`)
+    } catch (error) {
+      setErrorMessage(error?.message || 'Persona export failed.')
+    }
+  }
+
   async function handleManualAdjustment() {
     if (!selectedPerson) return
     const amount = parseHufInteger(manualAmount)
@@ -1197,14 +1222,25 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                   <h4 className="card-title">Personas</h4>
                   <p className="helper-text">{visiblePeople.length} record{visiblePeople.length !== 1 ? 's' : ''}</p>
                 </div>
-                <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={showDeleted}
-                    onChange={(e) => setShowDeleted(e.target.checked)}
-                  />
-                  <span style={{ fontSize: '0.78rem' }}>Deleted</span>
-                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <button
+                    type="button"
+                    className="secondary-button btn-sm"
+                    onClick={handleExportPersonas}
+                    disabled={visiblePeople.length === 0}
+                    title="Export personas to Excel"
+                  >
+                    ↓ Export
+                  </button>
+                  <label className="checkbox-row">
+                    <input
+                      type="checkbox"
+                      checked={showDeleted}
+                      onChange={(e) => setShowDeleted(e.target.checked)}
+                    />
+                    <span style={{ fontSize: '0.78rem' }}>Deleted</span>
+                  </label>
+                </div>
               </div>
               <div className="record-list">
                 {visiblePeople.map((person) => {
