@@ -1,22 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 // ── Ingredient classification (mirrors StaffPosPanel) ─────────────────────
-const SPRITE_KEYWORDS = [
+const SPRITE_KEYWORDS_BURGER = [
   { kind: 'patty',   keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
   { kind: 'cheese',  keywords: ['sajt', 'cheese', 'cheddar'] },
   { kind: 'lettuce', keywords: ['salata', 'saláta', 'lettuce'] },
   { kind: 'tomato',  keywords: ['paradicsom', 'tomato'] },
   { kind: 'onion',   keywords: ['hagyma', 'onion'] },
   { kind: 'bacon',   keywords: ['bacon', 'szalonna'] },
-  { kind: 'sauce',   keywords: ['szosz', 'szósz', 'sauce', 'ketchup', 'majonez', 'majonéz', 'mustar', 'mustár'] },
+  { kind: 'ketchup', keywords: ['szosz', 'szósz', 'sauce', 'ketchup'] },
+  { kind: 'mustard', keywords: ['mustar', 'mustár', 'mustard'] },
+  { kind: 'mayo',    keywords: ['majonez', 'majonéz', 'mayo', 'majonaise'] },
+]
+
+const SPRITE_KEYWORDS_GYROS = [
+  { kind: 'gyrosmeat', keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
+  { kind: 'yogurt',    keywords: ['joghurt', 'joghurtos'] },
+  { kind: 'spicy',     keywords: ['csipos', 'csípős', 'csipős', 'spicy', 'eros', 'erős'] },
+  { kind: 'onion',     keywords: ['hagyma', 'onion'] },
+  { kind: 'lettuce',   keywords: ['salata', 'saláta', 'lettuce'] },
+  { kind: 'tomato',    keywords: ['paradicsom', 'tomato'] },
+  { kind: 'ketchup',   keywords: ['szosz', 'szósz', 'sauce', 'ketchup'] },
 ]
 
 function normalizeLabel(label) {
   return String(label || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 }
-function getSpriteKind(label) {
+function getSpriteKind(label, variant = 'burger') {
+  const table = variant === 'gyros' ? SPRITE_KEYWORDS_GYROS : SPRITE_KEYWORDS_BURGER
   const n = normalizeLabel(label)
-  return SPRITE_KEYWORDS.find((e) => e.keywords.some((k) => n.includes(normalizeLabel(k))))?.kind || 'default'
+  return table.find((e) => e.keywords.some((k) => n.includes(normalizeLabel(k))))?.kind || 'default'
 }
 
 // ── Game constants ────────────────────────────────────────────────────────
@@ -28,7 +41,8 @@ const SPEED_BASE   = 9     // % per second
 const SPEED_JITTER = 5     // max extra % per second
 
 // ── Component ─────────────────────────────────────────────────────────────
-export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
+export function BurgerCatchGame({ product, template, variant = 'burger', onComplete, onCancel }) {
+  const isGyros = variant === 'gyros'
   // Default included ingredients
   const ingredients = useMemo(
     () => template?.defaultIncludedIngredients || [],
@@ -161,22 +175,29 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
       return wrapper
     }
 
-    // Top bun: actual burger-bun--top sprite
-    function makeTopBunEl(item) {
+    // Top cap: bun for burgers, tortilla for gyros
+    function makeTopCapEl(item) {
       const wrapper = document.createElement('div')
-      wrapper.className = 'catch-item catch-item--top-bun'
+      wrapper.className = `catch-item ${isGyros ? 'catch-item--top-tortilla' : 'catch-item--top-bun'}`
 
-      const bun = document.createElement('div')
-      bun.className = 'burger-bun burger-bun--top'
-      bun.style.cssText = 'width:100%;display:flex;justify-content:center;'
-      bun.appendChild(document.createElement('span'))
+      if (isGyros) {
+        const tortilla = document.createElement('div')
+        tortilla.className = 'gyros-wrap gyros-wrap--top game-top-tortilla-cap'
+        tortilla.style.cssText = 'width:100%;'
+        wrapper.appendChild(tortilla)
+      } else {
+        const bun = document.createElement('div')
+        bun.className = 'burger-bun burger-bun--top'
+        bun.style.cssText = 'width:100%;display:flex;justify-content:center;'
+        bun.appendChild(document.createElement('span'))
+        wrapper.appendChild(bun)
+      }
 
       const lbl = document.createElement('span')
       lbl.className = 'catch-item-label'
-      lbl.textContent = '⬆ Felső buci!'
-
-      wrapper.appendChild(bun)
+      lbl.textContent = isGyros ? '⬆ Csavard be!' : '⬆ Felső buci!'
       wrapper.appendChild(lbl)
+
       wrapper.style.cssText = `left:${item.x}%;top:${item.y}%;`
       layer.appendChild(wrapper)
       return wrapper
@@ -214,7 +235,7 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
         isExtra: ing.isExtra,
         // price: used when caught — extras use their own price, included use 0
         price: ing.isExtra ? (ing.price ?? 0) : 0,
-        spriteKind: getSpriteKind(ing.label),
+        spriteKind: getSpriteKind(ing.label, variant),
         label: ing.label,
         x: 8 + Math.random() * 84,
         y: -12,
@@ -234,7 +255,7 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
         speed: SPEED_BASE * 0.72, // a bit slower so it's catchable
         el: null,
       }
-      item.el = makeTopBunEl(item)
+      item.el = makeTopCapEl(item)
       fallingRef.current.push(item)
     }
 
@@ -380,7 +401,7 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
       fallingRef.current = []
       if (layer) layer.innerHTML = ''
     }
-  }, [phase, ingredients, optionalExtras])
+  }, [phase, ingredients, optionalExtras, isGyros])
 
   // ── Complete → fire onComplete after a brief celebration ──────────────
   useEffect(() => {
@@ -407,7 +428,7 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
   const totalCount  = ingredients.length
 
   return (
-    <div className="game-overlay" role="dialog" aria-modal="true" aria-label="Burger összerakós játék">
+    <div className="game-overlay" role="dialog" aria-modal="true" aria-label={isGyros ? 'Gyros összerakós játék' : 'Burger összerakós játék'}>
       {/* Header */}
       <div className="game-header">
         <button type="button" className="game-cancel-btn" onClick={onCancel}>
@@ -416,7 +437,7 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
 
         <div className="game-progress">
           {ingredients.map((ing) => {
-            const kind = getSpriteKind(ing.label)
+            const kind = getSpriteKind(ing.label, variant)
             return (
               <span
                 key={ing.id}
@@ -451,7 +472,7 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
               {countdown === 0 ? 'GO!' : countdown}
             </span>
             <p className="game-countdown-hint">
-              {product.name} — csípd el az összetevőket, majd a felső buci zárja le a burgert!
+              {product.name} — csípd el az összetevőket, majd {isGyros ? 'a tortilla csavarja be a gyrost!' : 'a felső buci zárja le a burgert!'}
             </p>
           </div>
         ) : null}
@@ -460,18 +481,22 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
         {complete ? (
           <div className="game-celebrate">
             <span className="game-celebrate-icon">🎉</span>
-            <span className="game-celebrate-text">Burger kész!</span>
+            <span className="game-celebrate-text">{isGyros ? 'Gyros kész!' : 'Burger kész!'}</span>
           </div>
         ) : null}
 
         {/* Paddle — bottom bun + burger tower stacked on top */}
         <div ref={paddleRef} className="game-paddle" style={{ left: '50%' }}>
           {/* Tower grows upward: top bun (if caught) → ingredients → bottom bun */}
-          <div className="game-burger-tower">
+          <div className={isGyros ? 'game-gyros-tower' : 'game-burger-tower'}>
             {topBunCaught ? (
-              <div className="burger-bun burger-bun--top game-tower-top-bun" aria-hidden="true">
-                <span />
-              </div>
+              isGyros ? (
+                <div className="gyros-wrap gyros-wrap--top game-tower-top-tortilla" aria-hidden="true" />
+              ) : (
+                <div className="burger-bun burger-bun--top game-tower-top-bun" aria-hidden="true">
+                  <span />
+                </div>
+              )
             ) : null}
             {caughtStack.map((entry) => (
               <div
@@ -484,7 +509,7 @@ export function BurgerCatchGame({ product, template, onComplete, onCancel }) {
               </div>
             ))}
           </div>
-          <div className="game-bun-bottom" />
+          <div className={isGyros ? 'game-tortilla-bottom' : 'game-bun-bottom'} />
         </div>
       </div>
     </div>

@@ -20,7 +20,7 @@ function formatTimestampParts(value) {
 }
 
 function formatTimestamp(value) {
-  if (!value?.toDate) return 'Waiting for timestamp'
+  if (!value?.toDate) return 'Időbélyegre vár'
   return value.toDate().toLocaleString('hu-HU')
 }
 
@@ -55,7 +55,7 @@ function buildPersonLabel(personId, peopleById) {
 }
 
 function buildActorLabel(actorUid, accountsById) {
-  if (!actorUid) return 'Unknown'
+  if (!actorUid) return 'Ismeretlen'
 
   const account = accountsById.get(actorUid)
   if (!account) return actorUid
@@ -96,6 +96,19 @@ function getEventStatus(event, activeEventId) {
   if (!event) return 'draft'
   if (activeEventId === event.id) return 'active'
   return event.status || 'draft'
+}
+
+function getStatusLabel(status) {
+  switch (status) {
+    case 'active':
+      return 'aktív'
+    case 'draft':
+      return 'vázlat'
+    case 'closed':
+      return 'lezárva'
+    default:
+      return status
+  }
 }
 
 export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid, showEventSelector = false }) {
@@ -176,11 +189,6 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
 
   useEffect(() => { setPage(1) }, [pageSize, searchQuery, typeFilter, eventId])
 
-  const selectedEvent = useMemo(
-    () => events.find((e) => e.id === selectedEventId) || null,
-    [events, selectedEventId],
-  )
-
   return (
     <div className="admin-section">
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
@@ -189,7 +197,7 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
         <div className="audit-toolbar">
           {showEventSelector ? (
             <div className="form-field audit-event-field">
-              <label htmlFor="auditEventSelect">Event</label>
+              <label htmlFor="auditEventSelect">Esemény</label>
               <select
                 id="auditEventSelect"
                 value={selectedEventId}
@@ -201,12 +209,12 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
                   setTypeFilter('')
                 }}
               >
-                <option value="">Select an event…</option>
+                <option value="">Válassz eseményt...</option>
                 {events.map((event) => {
                   const status = getEventStatus(event, activeEventId)
                   return (
                     <option key={event.id} value={event.id}>
-                      {event.name} ({event.code}) — {formatDate(event.startsOn)} [{status}]
+                      {event.name} ({event.code}) — {formatDate(event.startsOn)} [{getStatusLabel(status)}]
                     </option>
                   )
                 })}
@@ -217,30 +225,30 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
           {eventId ? (
             <>
               <div className="form-field audit-search-field">
-                <label htmlFor="auditLogSearch">Search</label>
+                <label htmlFor="auditLogSearch">Keresés</label>
                 <input
                   id="auditLogSearch"
                   type="search"
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder="Name, actor, action, target, or date"
+                  placeholder="Név, művelet, cél vagy dátum"
                 />
               </div>
               <div className="form-field audit-filter-field">
-                <label htmlFor="auditTypeFilter">Action</label>
+                <label htmlFor="auditTypeFilter">Művelet</label>
                 <select
                   id="auditTypeFilter"
                   value={typeFilter}
                   onChange={(event) => setTypeFilter(event.target.value)}
                 >
-                  <option value="">All</option>
+                  <option value="">Összes</option>
                   {typeOptions.map((type) => (
                     <option key={type} value={type}>{type}</option>
                   ))}
                 </select>
               </div>
               <div className="form-field audit-page-size-field">
-                <label htmlFor="auditPageSize">Per page</label>
+                <label htmlFor="auditPageSize">Oldalanként</label>
                 <select
                   id="auditPageSize"
                   value={pageSize}
@@ -290,30 +298,30 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
                             className="audit-refund-btn"
                             onClick={() => { setRefundConfirmId(log.id); setRefundError(null) }}
                           >
-                            Refund
+                            Visszatérítés
                           </button>
                         ) : null}
                         {isOrderLog && isConfirming ? (
                           <span className="audit-refund-confirm">
-                            <span>Are you sure?</span>
+                            <span>Biztos?</span>
                             <button
                               type="button"
                               className="audit-refund-confirm-btn yes"
                               onClick={() => handleRefund(log)}
                             >
-                              Yes, refund
+                              Igen, visszatérítés
                             </button>
                             <button
                               type="button"
                               className="audit-refund-confirm-btn"
                               onClick={() => setRefundConfirmId(null)}
                             >
-                              Cancel
+                              Mégse
                             </button>
                           </span>
                         ) : null}
                         {isPending ? (
-                          <span className="helper-text" style={{ fontSize: '0.75rem' }}>Refunding…</span>
+                          <span className="helper-text" style={{ fontSize: '0.75rem' }}>Visszatérítés...</span>
                         ) : null}
                       </div>
                       {rowError ? (
@@ -329,34 +337,34 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
                   </article>
                 )
               })}
-              {logs.length === 0 ? <p className="helper-text">This event has no logs yet.</p> : null}
-              {logs.length > 0 && visibleLogs.length === 0 ? <p className="helper-text">No logs match the filters.</p> : null}
+              {logs.length === 0 ? <p className="helper-text">Ehhez az eseményhez még nincs napló.</p> : null}
+              {logs.length > 0 && visibleLogs.length === 0 ? <p className="helper-text">Nincs a szűrőknek megfelelő napló.</p> : null}
             </div>
 
             {filteredLogs.length > pageSize ? (
-              <div className="audit-pagination" aria-label="Log pages">
+              <div className="audit-pagination" aria-label="Napló oldalak">
                 <button
                   type="button"
                   className="secondary-button"
                   onClick={() => setPage((v) => Math.max(1, v - 1))}
                   disabled={currentPage === 1}
                 >
-                  Previous
+                  Előző
                 </button>
-                <span className="helper-text">Page {currentPage} / {totalPages}</span>
+                <span className="helper-text">{currentPage}. oldal / {totalPages}</span>
                 <button
                   type="button"
                   className="secondary-button"
                   onClick={() => setPage((v) => Math.min(totalPages, v + 1))}
                   disabled={currentPage === totalPages}
                 >
-                  Next
+                  Következő
                 </button>
               </div>
             ) : null}
           </>
         ) : (
-          <p className="helper-text">Select an event above to view its logs.</p>
+          <p className="helper-text">Válassz eseményt fent a naplók megtekintéséhez.</p>
         )}
       </section>
     </div>

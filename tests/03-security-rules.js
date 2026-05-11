@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url'
 import { PROJECT_ID } from './config.js'
 import { assert, section, printStats, printSummary } from './helpers.js'
 import {
-  doc, getDoc, setDoc, collection, getDocs
+  doc, getDoc, setDoc
 } from 'firebase/firestore'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -76,8 +76,8 @@ await testEnv.withSecurityRulesDisabled(async (ctx) => {
     setDoc(doc(db, `events/${TEST_EVENT_ID}/auditLogs/audit-001`), {
       type: 'topup', actorUid: 'admin-uid', createdAt: new Date(),
     }),
-    setDoc(doc(db, `events/${TEST_EVENT_ID}/qrAssignments/12345`), {
-      code: '12345', status: 'assigned', assignedPersonaId: 'person-uid',
+    setDoc(doc(db, `events/${TEST_EVENT_ID}/qrAssignments/1234`), {
+      code: '1234', status: 'assigned', assignedPersonaId: 'person-uid',
     }),
   ]
   await Promise.all(sets)
@@ -165,11 +165,11 @@ assert(true, 'User cannot read baskets (POS staff only)')
 // ── 6. QR assignments ────────────────────────────────────────────────────────
 section('Rules: QR assignments')
 
-await assertSucceeds(getDoc(doc(adminDb, `events/${TEST_EVENT_ID}/qrAssignments/12345`)))
+await assertSucceeds(getDoc(doc(adminDb, `events/${TEST_EVENT_ID}/qrAssignments/1234`)))
 assert(true, 'Admin can read QR assignments')
-await assertFails(getDoc(doc(staffDb, `events/${TEST_EVENT_ID}/qrAssignments/12345`)))
+await assertFails(getDoc(doc(staffDb, `events/${TEST_EVENT_ID}/qrAssignments/1234`)))
 assert(true, 'Staff CANNOT read QR assignments (admin-only in rules)')
-await assertFails(getDoc(doc(userDb, `events/${TEST_EVENT_ID}/qrAssignments/12345`)))
+await assertFails(getDoc(doc(userDb, `events/${TEST_EVENT_ID}/qrAssignments/1234`)))
 assert(true, 'User cannot read QR assignments')
 
 // ── 7. audit logs ────────────────────────────────────────────────────────────

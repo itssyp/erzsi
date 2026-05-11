@@ -88,15 +88,15 @@ function normalizeScannedQrCode(rawValue) {
   const value = typeof rawValue === 'string' ? rawValue.trim() : ''
   if (!value) throw new Error('QR input is required.')
   if (value.length > 512) throw new Error('QR input is too long.')
-  if (/^\d{5}$/.test(value)) return value
+  if (/^\d{4}$/.test(value)) return value
   try {
     const parsedUrl = new URL(value)
     const q = parsedUrl.searchParams.get('code') || parsedUrl.searchParams.get('qr')
-    if (q && /^\d{5}$/.test(q.trim())) return q.trim()
-    const pathMatch = parsedUrl.pathname.match(/\/qr\/(\d{5})\/?$/i)
+    if (q && /^\d{4}$/.test(q.trim())) return q.trim()
+    const pathMatch = parsedUrl.pathname.match(/\/qr\/(\d{4})\/?$/i)
     if (pathMatch?.[1]) return pathMatch[1]
   } catch { /* fall through */ }
-  throw new Error('QR input must be a 5-digit code or a supported QR link.')
+  throw new Error('QR input must be a 4-digit code or a supported QR link.')
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -283,25 +283,25 @@ assertEqual(criticalWait, 84, 'KRITIKUS (21 items) → 84-minute wait estimate')
 // 9. QR code normalization
 section('QR code — input normalization (from Cloud Functions)')
 
-assertEqual(normalizeScannedQrCode('12345'), '12345', '5-digit code → returned as-is')
+assertEqual(normalizeScannedQrCode('1234'), '1234', '4-digit code -> returned as-is')
 assertEqual(
-  normalizeScannedQrCode('https://example.com/qr/42345'),
-  '42345',
-  'URL with /qr/{code} path → extracts code',
+  normalizeScannedQrCode('https://example.com/qr/4234'),
+  '4234',
+  'URL with /qr/{code} path -> extracts code',
 )
 assertEqual(
-  normalizeScannedQrCode('  67890  '),
-  '67890',
-  'Whitespace trimmed → extracts code',
+  normalizeScannedQrCode('  6789  '),
+  '6789',
+  'Whitespace trimmed -> extracts code',
 )
-assertThrows(() => normalizeScannedQrCode(''), 'QR input is required', 'Empty string → throws')
-assertThrows(() => normalizeScannedQrCode('1234'), '', '4-digit code → throws (not 5 digits)')
-assertThrows(() => normalizeScannedQrCode('123456'), '', '6-digit code → throws')
-assertThrows(() => normalizeScannedQrCode('abcde'), '', 'Non-numeric 5 chars → throws')
+assertThrows(() => normalizeScannedQrCode(''), 'QR input is required', 'Empty string -> throws')
+assertThrows(() => normalizeScannedQrCode('12345'), '', '5-digit code -> throws')
+assertThrows(() => normalizeScannedQrCode('123'), '', '3-digit code -> throws')
+assertThrows(() => normalizeScannedQrCode('abcd'), '', 'Non-numeric 4 chars -> throws')
 assertThrows(
-  () => normalizeScannedQrCode('https://example.com/qr/1234'),
+  () => normalizeScannedQrCode('https://example.com/qr/12345'),
   '',
-  'URL with 4-digit code → throws',
+  'URL with 5-digit code -> throws',
 )
 
 // 10. Concurrency simulation: promise.all behaviour

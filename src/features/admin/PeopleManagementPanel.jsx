@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
 import { StatusCard } from '../../components/StatusCard'
@@ -19,12 +19,16 @@ import {
   generateQrCredentials,
   assignQrToPerson,
   revokeQrForPerson,
+  resolveAssignedQrToPerson,
   subscribeToQrCredentials,
   QR_CREDENTIAL_STATUSES,
 } from '../qr/qrService'
 import { useQrScanner } from '../qr/useQrScanner'
+import { QR_CODE_LENGTH, buildQrCredentialLink, normalizeQrInput } from '../qr/qrLinks'
 
 const quickTopupAmounts = [2000, 5000, 10000, 20000]
+const KEYBOARD_SCANNER_MAX_GAP_MS = 350
+const KEYBOARD_SCANNER_FLUSH_MS = 500
 
 const emptyEditState = {
   displayName: '',
@@ -73,7 +77,7 @@ function normalizeFunctionError(error, fallback) {
     case 'functions/invalid-argument':
       return error.message || fallback
     case 'functions/permission-denied':
-      return 'Admin permissions are required for this action.'
+      return 'Admin jogosultság szükséges ehhez a művelethez.'
     default:
       return error?.message || fallback
   }
@@ -127,11 +131,39 @@ function parsePersonaExcelRows(workbook) {
   ])
 }
 
-const COMPLETENESS_LABELS = { complete: 'Complete', partial: 'Partial', incomplete: 'Incomplete' }
+const COMPLETENESS_LABELS = { complete: 'Kész', partial: 'Részleges', incomplete: 'Hiányos' }
 const COMPLETENESS_COLORS = {
   complete:   { background: 'color-mix(in srgb, var(--success) 12%, transparent)', color: '#15803d', border: '#86efac' },
   partial:    { background: '#fefce8', color: '#92400e', border: '#fde047' },
   incomplete: { background: 'var(--surface)', color: 'var(--muted)', border: 'var(--border)' },
+}
+
+function getStatusLabel(status) {
+  switch (status) {
+    case 'active':
+      return 'aktív'
+    case 'deleted':
+      return 'törölt'
+    case 'assigned':
+      return 'hozzárendelve'
+    case 'unassigned':
+      return 'szabad'
+    case 'revoked':
+      return 'visszavonva'
+    default:
+      return status || '-'
+  }
+}
+
+function getAttendeeTypeLabel(type) {
+  switch (type) {
+    case ATTENDEE_TYPES.freshman:
+      return 'Gólya'
+    case ATTENDEE_TYPES.organizer:
+      return 'Szervező'
+    default:
+      return type || '-'
+  }
 }
 
 function CompletenessDot({ completeness }) {
@@ -163,7 +195,7 @@ function PersonProfileTab({ selectedPerson, editState, setEditState, pending, on
   return (
     <div className="stack-block" style={{ gap: '14px' }}>
       <div className="field">
-        <label htmlFor="personName">Display name</label>
+        <label htmlFor="personName">Megjelenített név</label>
         <input
           id="personName"
           value={editState.displayName}
@@ -171,23 +203,23 @@ function PersonProfileTab({ selectedPerson, editState, setEditState, pending, on
         />
       </div>
       <div className="field">
-        <label htmlFor="personTeam">Team</label>
+        <label htmlFor="personTeam">Csapat</label>
         <input
           id="personTeam"
           value={editState.team}
           onChange={(e) => setEditState((s) => ({ ...s, team: e.target.value }))}
-          placeholder="Red, Blue, Org…"
+          placeholder="Piros, Kék, Szervező..."
         />
       </div>
       <div className="field">
-        <label htmlFor="personAttendeeType">Attendee type</label>
+        <label htmlFor="personAttendeeType">Résztvevő típusa</label>
         <select
           id="personAttendeeType"
           value={editState.attendeeType}
           onChange={(e) => setEditState((s) => ({ ...s, attendeeType: e.target.value }))}
         >
-          <option value={ATTENDEE_TYPES.freshman}>Freshman</option>
-          <option value={ATTENDEE_TYPES.organizer}>Organizer</option>
+          <option value={ATTENDEE_TYPES.freshman}>Gólya</option>
+          <option value={ATTENDEE_TYPES.organizer}>Szervező</option>
         </select>
       </div>
       <div className="field">
@@ -196,28 +228,28 @@ function PersonProfileTab({ selectedPerson, editState, setEditState, pending, on
           id="personShibboleth"
           value={editState.shibboleth}
           onChange={(e) => setEditState((s) => ({ ...s, shibboleth: e.target.value }))}
-          placeholder="External identifier"
+          placeholder="Külső azonosító"
         />
       </div>
       <div className="button-row">
         <button type="button" className="primary-button" onClick={onSave} disabled={pending}>
-          Save changes
+          Változások mentése
         </button>
         {isDeleted ? (
           <button type="button" className="secondary-button" onClick={onRestore} disabled={pending}>
-            Restore persona
+            Persona visszaállítása
           </button>
         ) : (
           <button type="button" className="danger-button" onClick={onDelete} disabled={pending}>
-            Delete persona
+            Persona törlése
           </button>
         )}
       </div>
       <ul className="detail-list" style={{ fontSize: '0.8rem', marginTop: '4px' }}>
-        <li><strong>Public ID</strong> <span style={{ fontFamily: 'monospace' }}>{getPersonDisplayId(selectedPerson)}</span></li>
-        <li><strong>Internal ID</strong> <span style={{ fontFamily: 'monospace', color: 'var(--muted)', fontSize: '0.9em' }}>{selectedPerson.internalId}</span></li>
-        <li><strong>Status</strong> <span style={{ textTransform: 'capitalize' }}>{selectedPerson.recordStatus}</span></li>
-        <li><strong>Created</strong> <span>{formatTimestamp(selectedPerson.createdAt)}</span></li>
+        <li><strong>Publikus ID</strong> <span style={{ fontFamily: 'monospace' }}>{getPersonDisplayId(selectedPerson)}</span></li>
+        <li><strong>Belső ID</strong> <span style={{ fontFamily: 'monospace', color: 'var(--muted)', fontSize: '0.9em' }}>{selectedPerson.internalId}</span></li>
+        <li><strong>Állapot</strong> <span style={{ textTransform: 'capitalize' }}>{getStatusLabel(selectedPerson.recordStatus)}</span></li>
+        <li><strong>Létrehozva</strong> <span>{formatTimestamp(selectedPerson.createdAt)}</span></li>
       </ul>
     </div>
   )
@@ -242,19 +274,19 @@ function PersonAccountTab({ selectedPerson, linkedAccount, availableAccounts, ac
           </div>
           <ul className="detail-list" style={{ fontSize: '0.8rem' }}>
             <li><strong>UID</strong> <span style={{ fontFamily: 'monospace', fontSize: '0.72rem' }}>{linkedUid}</span></li>
-            <li><strong>Role</strong> <span>{linkedAccount.role || 'user'}</span></li>
+            <li><strong>Szerepkör</strong> <span>{linkedAccount.role || 'user'}</span></li>
           </ul>
           <div className="button-row">
             <button type="button" className="danger-button" onClick={onUnlink} disabled={pending}>
-              Unlink account
+              Fiók leválasztása
             </button>
           </div>
         </>
       ) : (
         <>
-          <p className="helper-text">No account linked. Search and click an account below to link it.</p>
+          <p className="helper-text">Nincs fiók hozzárendelve. Keress rá egy fiókra, majd kattints rá a hozzárendeléshez.</p>
           <div className="field">
-            <label htmlFor="accountSearch">Search by name or email</label>
+            <label htmlFor="accountSearch">Keresés név vagy e-mail alapján</label>
             <input
               id="accountSearch"
               value={accountSearch}
@@ -279,7 +311,7 @@ function PersonAccountTab({ selectedPerson, linkedAccount, availableAccounts, ac
               </button>
             ))}
             {availableAccounts.length === 0 && (
-              <p className="helper-text">No matching unlinked attendee accounts.</p>
+              <p className="helper-text">Nincs ilyen leválasztott résztvevői fiók.</p>
             )}
           </div>
         </>
@@ -314,39 +346,39 @@ function PersonQrTab({
             <div className="qr-code-value">{selectedQrCredential?.code || selectedPerson.assignedQrId || selectedPerson.qrCodeId}</div>
             <div className="qr-link-value">{selectedQrCredential?.link || '—'}</div>
             <ul className="detail-list" style={{ fontSize: '0.8rem', marginTop: '4px' }}>
-              <li><strong>Status</strong> <span style={{ textTransform: 'capitalize' }}>{selectedQrCredential?.status || 'assigned'}</span></li>
-              <li><strong>Assigned</strong> <span>{formatTimestamp(selectedQrCredential?.assignedAt)}</span></li>
+              <li><strong>Állapot</strong> <span style={{ textTransform: 'capitalize' }}>{getStatusLabel(selectedQrCredential?.status || 'assigned')}</span></li>
+              <li><strong>Hozzárendelve</strong> <span>{formatTimestamp(selectedQrCredential?.assignedAt)}</span></li>
             </ul>
           </div>
           <div className="button-row">
             <button type="button" className="danger-button" onClick={onRevoke} disabled={pending}>
-              Revoke QR credential
+              QR azonosító visszavonása
             </button>
           </div>
         </>
       ) : (
         <>
-          <p className="helper-text">No QR credential assigned. Pick one from the pool below, scan a physical QR, or enter a code manually.</p>
+          <p className="helper-text">Nincs QR azonosító hozzárendelve. Válassz egyet a lenti készletből, olvass be egy fizikai QR-t, vagy írd be kézzel.</p>
 
           <div className="lookup-toolbar">
             <input
               id="qrValue"
               value={qrInput}
               onChange={(e) => setQrInput(e.target.value)}
-              placeholder="5-digit code or QR link"
+              placeholder="4 jegyű kód vagy QR link"
             />
             <button
               type="button"
               className={`icon-button${qrScanActive ? ' active' : ''}`}
               onClick={() => {
                 if (!scannerSupported) {
-                  onError('Camera QR scanning is not supported on this device.')
+                  onError('A kamerás QR-beolvasás nem támogatott ezen az eszközön.')
                   return
                 }
                 setQrScanActive((v) => !v)
               }}
-              aria-label={qrScanActive ? 'Close scanner' : 'Scan QR'}
-              title={qrScanActive ? 'Close scanner' : 'Scan QR'}
+              aria-label={qrScanActive ? 'Beolvasó bezárása' : 'QR beolvasása'}
+              title={qrScanActive ? 'Beolvasó bezárása' : 'QR beolvasása'}
               disabled={pending}
             >
               <CameraIcon />
@@ -366,14 +398,14 @@ function PersonQrTab({
               onClick={() => onAssign()}
               disabled={pending || !qrInput.trim()}
             >
-              Assign manually
+              Kézi hozzárendelés
             </button>
           </div>
 
           {unassignedQrCredentials.length > 0 && (
             <>
               <p className="helper-text" style={{ marginBottom: 0 }}>
-                Or pick from the unassigned pool ({unassignedQrCredentials.length} available):
+                Vagy válassz a szabad készletből ({unassignedQrCredentials.length} elérhető):
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
                 {unassignedQrCredentials.slice(0, 20).map((cred) => (
@@ -386,7 +418,7 @@ function PersonQrTab({
                   >
                     <span style={{ fontFamily: 'monospace', fontWeight: 700, letterSpacing: '0.12em' }}>{cred.code}</span>
                     <span style={{ fontSize: '0.72rem', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '160px' }}>
-                      {cred.link || 'link pending'}
+                      {cred.link || 'link előkészítés alatt'}
                     </span>
                   </button>
                 ))}
@@ -396,9 +428,9 @@ function PersonQrTab({
 
           {unassignedQrCredentials.length === 0 && (
             <StatusCard
-              title="No unassigned credentials"
+              title="Nincs szabad azonosító"
               tone="warning"
-              body="Generate a new batch from the QR Pool tab first."
+              body="Először generálj egy új adagot a QR Pool fülön."
             />
           )}
         </>
@@ -424,12 +456,12 @@ function PersonBalanceTab({
   return (
     <div className="stack-block" style={{ gap: '20px' }}>
       <div style={{ textAlign: 'center', padding: '16px 0' }}>
-        <div className="balance-label">Current balance</div>
+        <div className="balance-label">Aktuális egyenleg</div>
         <div className="balance-value">{formatHuf(selectedPerson.balance || 0)}</div>
       </div>
 
       <div>
-        <p className="helper-text" style={{ marginBottom: '10px' }}>Quick top-up</p>
+        <p className="helper-text" style={{ marginBottom: '10px' }}>Gyors feltöltés</p>
         <div className="button-row">
           {quickTopupAmounts.map((amount) => (
             <button
@@ -446,46 +478,46 @@ function PersonBalanceTab({
       </div>
 
       <div className="stack-block" style={{ gap: '10px' }}>
-        <p className="helper-text" style={{ marginBottom: 0 }}>Custom top-up</p>
+        <p className="helper-text" style={{ marginBottom: 0 }}>Egyedi feltöltés</p>
         <div className="field">
-          <label htmlFor="customTopup">Amount (HUF)</label>
+          <label htmlFor="customTopup">Összeg (HUF)</label>
           <input
             id="customTopup"
             value={customTopupAmount}
             onChange={(e) => setCustomTopupAmount(e.target.value)}
-            placeholder="e.g. 3500"
+            placeholder="pl. 3500"
           />
         </div>
         <div className="button-row">
           <button type="button" className="primary-button" onClick={onCustomTopup} disabled={pending}>
-            Apply top-up
+            Feltöltés jóváírása
           </button>
         </div>
       </div>
 
       <div className="stack-block" style={{ gap: '10px', paddingTop: '4px', borderTop: '1px dashed var(--border)' }}>
-        <p className="helper-text" style={{ marginBottom: 0 }}>Manual adjustment (can be negative)</p>
+        <p className="helper-text" style={{ marginBottom: 0 }}>Kézi korrekció (negatív is lehet)</p>
         <div className="field">
-          <label htmlFor="manualAmount">Amount (HUF)</label>
+          <label htmlFor="manualAmount">Összeg (HUF)</label>
           <input
             id="manualAmount"
             value={manualAmount}
             onChange={(e) => setManualAmount(e.target.value)}
-            placeholder="-500 or 1000"
+            placeholder="-500 vagy 1000"
           />
         </div>
         <div className="field">
-          <label htmlFor="manualReason">Reason (optional)</label>
+          <label htmlFor="manualReason">Indoklás (opcionális)</label>
           <input
             id="manualReason"
             value={manualReason}
             onChange={(e) => setManualReason(e.target.value)}
-            placeholder="Cash correction, event bonus…"
+            placeholder="Készpénz korrekció, esemény bónusz..."
           />
         </div>
         <div className="button-row">
           <button type="button" className="primary-button" onClick={onManualAdjustment} disabled={pending}>
-            Apply adjustment
+            Korrekció jóváírása
           </button>
         </div>
       </div>
@@ -519,7 +551,7 @@ function QrImage({ value, size = 160 }) {
 function QrPoolRow({ cred }) {
   const [expanded, setExpanded] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const value = cred.link || cred.code
+  const value = buildQrCredentialLink(cred.code) || cred.link || cred.code
 
   async function handleDownload() {
     if (!value) return
@@ -533,7 +565,7 @@ function QrPoolRow({ cred }) {
       a.click()
       document.body.removeChild(a)
     } catch (error) {
-      console.error('QR download failed', error)
+      console.error('QR letöltés sikertelen', error)
     } finally {
       setDownloading(false)
     }
@@ -544,7 +576,7 @@ function QrPoolRow({ cred }) {
       <div className="qr-pool-row-main">
         <span className="qr-pool-row-info">
           <strong>{cred.code}</strong>
-          <small>{cred.link || 'Link pending'}</small>
+          <small>{value || 'Link előkészítés alatt'}</small>
         </span>
         <span className="qr-pool-row-actions">
           <button
@@ -553,7 +585,7 @@ function QrPoolRow({ cred }) {
             onClick={() => setExpanded((v) => !v)}
             disabled={!value}
           >
-            {expanded ? 'Hide' : 'View'}
+            {expanded ? 'Elrejtés' : 'Megnyitás'}
           </button>
           <button
             type="button"
@@ -638,7 +670,7 @@ function QrPoolTab({
     try {
       const items = await Promise.all(
         eligible.map(async (cred) => {
-          const value = cred.link || cred.code
+          const value = buildQrCredentialLink(cred.code) || cred.link || cred.code
           const dataUrl = await QRCode.toDataURL(value, { width: 200, margin: 1, errorCorrectionLevel: 'M' })
           return { code: cred.code, dataUrl }
         }),
@@ -651,7 +683,7 @@ function QrPoolTab({
       win.focus()
       setTimeout(() => win.print(), 400)
     } catch (error) {
-      console.error('Print failed', error)
+      console.error('Nyomtatás sikertelen', error)
     } finally {
       setPrintLoading(false)
     }
@@ -662,28 +694,28 @@ function QrPoolTab({
       {/* Stats */}
       <div className="detail-grid">
         <span className="event-pill" style={{ background: 'color-mix(in srgb, var(--success) 10%, transparent)', borderColor: '#86efac', color: '#15803d' }}>
-          Assigned: {assignedCount}
+          Hozzárendelve: {assignedCount}
         </span>
         <span className="event-pill" style={{ background: '#fefce8', borderColor: '#fde047', color: '#92400e' }}>
-          Unassigned: {unassignedQrCredentials.length}
+          Szabad: {unassignedQrCredentials.length}
         </span>
         <span className="event-pill" style={{ background: 'var(--surface)', color: 'var(--muted)' }}>
-          Revoked: {revokedQrCredentials.length}
+          Visszavonva: {revokedQrCredentials.length}
         </span>
         <span className="event-pill">
-          Total pool: {qrCredentials.length}
+          Összesen: {qrCredentials.length}
         </span>
       </div>
 
       {/* Generate batch */}
       <section className="panel">
-        <h4 className="card-title">Generate new batch</h4>
+        <h4 className="card-title">Új adag generálása</h4>
         <p className="helper-text">
-          Creates N unassigned QR credentials in the pool. These can then be assigned to personas individually.
+          N darab szabad QR azonosítót hoz létre. Ezeket később egyenként lehet personákhoz rendelni.
         </p>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: '12px' }}>
           <div className="field" style={{ margin: 0, flex: '0 0 120px' }}>
-            <label htmlFor="qrBatchCount">Count</label>
+            <label htmlFor="qrBatchCount">Darab</label>
             <input
               id="qrBatchCount"
               value={qrGenerationCount}
@@ -695,7 +727,7 @@ function QrPoolTab({
             />
           </div>
           <button type="button" className="primary-button" onClick={onGenerateBatch} disabled={pending}>
-            Generate QR credentials
+            QR azonosítók generálása
           </button>
         </div>
       </section>
@@ -704,8 +736,8 @@ function QrPoolTab({
       <section className="panel">
         <div className="split-header" style={{ marginBottom: '10px' }}>
           <div>
-            <h4 className="card-title">Unassigned pool ({unassignedQrCredentials.length})</h4>
-            <p className="helper-text">Ready to be assigned to a persona.</p>
+            <h4 className="card-title">Szabad készlet ({unassignedQrCredentials.length})</h4>
+            <p className="helper-text">Personához rendelhető azonosítók.</p>
           </div>
           {unassignedQrCredentials.length > 0 ? (
             <button
@@ -713,9 +745,9 @@ function QrPoolTab({
               className="secondary-button btn-sm"
               onClick={handlePrint}
               disabled={printLoading}
-              title="Generate print-ready A4 sheet of all unassigned QR codes"
+              title="Nyomtatható A4-es lap generálása az összes szabad QR kóddal"
             >
-              {printLoading ? 'Generating…' : '🖨 Print sheet'}
+              {printLoading ? 'Generálás...' : 'Nyomtatási lap'}
             </button>
           ) : null}
         </div>
@@ -724,21 +756,21 @@ function QrPoolTab({
             <QrPoolRow key={cred.id} cred={cred} />
           ))}
           {unassignedQrCredentials.length === 0 && (
-            <p className="helper-text">No unassigned credentials. Generate a batch above.</p>
+            <p className="helper-text">Nincs szabad azonosító. Generálj egy új adagot fent.</p>
           )}
         </div>
       </section>
 
       {/* Revoked */}
       <section className="panel">
-        <h4 className="card-title" style={{ marginBottom: '6px' }}>Revoked credentials ({revokedQrCredentials.length})</h4>
-        <p className="helper-text" style={{ marginBottom: '10px' }}>Permanently inactivated, cannot be reassigned.</p>
+        <h4 className="card-title" style={{ marginBottom: '6px' }}>Visszavont azonosítók ({revokedQrCredentials.length})</h4>
+        <p className="helper-text" style={{ marginBottom: '10px' }}>Végleg inaktivált azonosítók, nem rendelhetők újra.</p>
         <div className="qr-pool-list">
           {revokedQrCredentials.map((cred) => (
             <QrPoolRow key={cred.id} cred={cred} />
           ))}
           {revokedQrCredentials.length === 0 && (
-            <p className="helper-text">No revoked credentials.</p>
+            <p className="helper-text">Nincs visszavont azonosító.</p>
           )}
         </div>
       </section>
@@ -747,7 +779,7 @@ function QrPoolTab({
 }
 
 // ── Main export ────────────────────────────────────────────────────────────
-export function PeopleManagementPanel({ eventId, actorUid }) {
+export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) {
   const [people, setPeople] = useState([])
   const [accounts, setAccounts] = useState([])
   const [qrCredentials, setQrCredentials] = useState([])
@@ -758,6 +790,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
   const [selectedPersonId, setSelectedPersonId] = useState(null)
   const [editState, setEditState] = useState(emptyEditState)
   const [accountSearch, setAccountSearch] = useState('')
+  const [personaSearch, setPersonaSearch] = useState('')
   const [qrInput, setQrInput] = useState('')
   const [qrScanActive, setQrScanActive] = useState(false)
   const [qrGenerationCount, setQrGenerationCount] = useState('20')
@@ -766,8 +799,14 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
   const [manualReason, setManualReason] = useState('')
   const [showDeleted, setShowDeleted] = useState(false)
   const [pending, setPending] = useState(false)
-  const [activeTopTab, setActiveTopTab] = useState('personas')
   const [activePersonTab, setActivePersonTab] = useState('profile')
+  const activeTopTab = view === 'qrpool' ? 'qrpool' : 'personas'
+  const selectedPersonTargetTabRef = useRef('profile')
+  const personaQrAutoSelectRef = useRef('')
+  const keyboardScannerBufferRef = useRef('')
+  const keyboardScannerLastKeyAtRef = useRef(0)
+  const keyboardScannerFlushTimerRef = useRef(null)
+  const hiddenPersonaScannerInputRef = useRef(null)
 
   useEffect(() => {
     return subscribeToPeople(eventId, setPeople, (error) => setErrorMessage(error.message))
@@ -784,6 +823,27 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
   const visiblePeople = useMemo(() => {
     return people.filter((person) => showDeleted || person.recordStatus !== PERSON_RECORD_STATUSES.deleted)
   }, [people, showDeleted])
+
+  const filteredVisiblePeople = useMemo(() => {
+    const search = personaSearch.trim().toLowerCase()
+    if (!search) return visiblePeople
+
+    return visiblePeople.filter((person) => {
+      const haystack = [
+        person.displayName,
+        person.team,
+        person.attendeeType,
+        person.shibboleth,
+        person.internalId,
+        person.assignedQrId,
+        person.qrCodeId,
+        person.assignedQrLink,
+        getPersonDisplayId(person),
+      ].filter(Boolean).join(' ').toLowerCase()
+
+      return haystack.includes(search)
+    })
+  }, [personaSearch, visiblePeople])
 
   const selectedPerson = useMemo(() => {
     return people.find((person) => person.id === selectedPersonId) || null
@@ -838,10 +898,13 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     return accounts.find((a) => a.uid === uid) || null
   }, [accounts, selectedPerson])
 
-  const appBaseUrl = useMemo(() => {
-    if (typeof window === 'undefined') return ''
-    return window.location.origin
-  }, [])
+  const findPersonByQrCode = useCallback((qrCode) => {
+    return people.find((person) => {
+      return person.assignedQrId === qrCode
+        || person.qrCodeId === qrCode
+        || person.assignedQrLink?.includes(`/qr/${qrCode}`)
+    }) || null
+  }, [people])
 
   const personaCounts = useMemo(() => {
     return visiblePeople.reduce((summary, person) => {
@@ -865,9 +928,204 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     },
   })
 
+  const selectPerson = useCallback((personId, targetTab = 'profile') => {
+    selectedPersonTargetTabRef.current = targetTab
+    setSelectedPersonId(personId)
+
+    if (personId === selectedPersonId) {
+      setActivePersonTab(targetTab)
+    }
+  }, [selectedPersonId])
+
+  const focusHiddenPersonaScannerInput = useCallback((force = false) => {
+    if (activeTopTab !== 'personas' || qrScanActive) {
+      return
+    }
+
+    const activeElement = document.activeElement
+    const hiddenInput = hiddenPersonaScannerInputRef.current
+    const tagName = activeElement?.tagName?.toLowerCase()
+    const activeElementIsTextEntry = tagName === 'input' || tagName === 'textarea' || tagName === 'select' || activeElement?.isContentEditable
+
+    if (!hiddenInput || activeElement === hiddenInput || (!force && activeElementIsTextEntry)) {
+      return
+    }
+
+    hiddenInput.focus({ preventScroll: true })
+  }, [activeTopTab, qrScanActive])
+
+  const trySelectPersonaFromQr = useCallback((rawValue) => {
+    const trimmedValue = String(rawValue || '').trim()
+    if (!trimmedValue || pending) {
+      return false
+    }
+
+    let normalizedQr = ''
+    try {
+      normalizedQr = normalizeQrInput(trimmedValue)
+    } catch {
+      return false
+    }
+
+    if (personaQrAutoSelectRef.current === normalizedQr) {
+      return true
+    }
+
+    personaQrAutoSelectRef.current = normalizedQr
+    setErrorMessage('')
+    setStatusMessage('')
+
+    const cachedPerson = findPersonByQrCode(normalizedQr)
+    if (cachedPerson) {
+      selectPerson(cachedPerson.id, 'balance')
+      setPersonaSearch('')
+      personaQrAutoSelectRef.current = ''
+      window.setTimeout(() => focusHiddenPersonaScannerInput(true), 0)
+      return true
+    }
+
+    ;(async () => {
+      try {
+        const result = await resolveAssignedQrToPerson({ eventId, qrInput: normalizedQr })
+        const person = result?.person
+
+        if (!person?.id) {
+          throw new Error('A QR kód nem található az aktív eseményben.')
+        }
+
+        selectPerson(person.id, 'balance')
+        setPersonaSearch('')
+      } catch (error) {
+        setErrorMessage(normalizeFunctionError(error, 'A QR kód nem található az aktív eseményben.'))
+      } finally {
+        personaQrAutoSelectRef.current = ''
+        window.setTimeout(() => focusHiddenPersonaScannerInput(true), 0)
+      }
+    })()
+
+    return true
+  }, [eventId, findPersonByQrCode, focusHiddenPersonaScannerInput, pending, selectPerson])
+
+  useEffect(() => {
+    trySelectPersonaFromQr(personaSearch)
+  }, [personaSearch, trySelectPersonaFromQr])
+
+  useEffect(() => {
+    const focusTimer = window.setTimeout(focusHiddenPersonaScannerInput, 0)
+    const scheduleScannerFocus = () => window.setTimeout(focusHiddenPersonaScannerInput, 0)
+
+    window.addEventListener('pointerup', scheduleScannerFocus)
+    window.addEventListener('focus', scheduleScannerFocus)
+
+    return () => {
+      window.clearTimeout(focusTimer)
+      window.removeEventListener('pointerup', scheduleScannerFocus)
+      window.removeEventListener('focus', scheduleScannerFocus)
+    }
+  }, [focusHiddenPersonaScannerInput, selectedPersonId])
+
+  useEffect(() => {
+    if (activeTopTab !== 'personas') {
+      return undefined
+    }
+
+    function clearKeyboardScannerFlushTimer() {
+      if (keyboardScannerFlushTimerRef.current) {
+        window.clearTimeout(keyboardScannerFlushTimerRef.current)
+        keyboardScannerFlushTimerRef.current = null
+      }
+    }
+
+    function flushKeyboardScannerBuffer() {
+      clearKeyboardScannerFlushTimer()
+      const bufferedValue = keyboardScannerBufferRef.current
+      keyboardScannerBufferRef.current = ''
+
+      if (bufferedValue.length >= QR_CODE_LENGTH) {
+        trySelectPersonaFromQr(bufferedValue)
+      }
+    }
+
+    function isTextEntryElement(element) {
+      const tagName = element?.tagName?.toLowerCase()
+      return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || element?.isContentEditable
+    }
+
+    function handleGlobalKeyDown(event) {
+      if (event.ctrlKey || event.altKey || event.metaKey || qrScanActive || isTextEntryElement(document.activeElement)) {
+        return
+      }
+
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        if (keyboardScannerBufferRef.current) {
+          event.preventDefault()
+          flushKeyboardScannerBuffer()
+        } else {
+          keyboardScannerLastKeyAtRef.current = 0
+        }
+        return
+      }
+
+      if (event.key.length !== 1) {
+        return
+      }
+
+      const now = Date.now()
+      if (now - keyboardScannerLastKeyAtRef.current > KEYBOARD_SCANNER_MAX_GAP_MS) {
+        keyboardScannerBufferRef.current = ''
+      }
+
+      keyboardScannerLastKeyAtRef.current = now
+      keyboardScannerBufferRef.current += event.key
+
+      if (keyboardScannerBufferRef.current.length >= 2) {
+        event.preventDefault()
+      }
+
+      clearKeyboardScannerFlushTimer()
+      keyboardScannerFlushTimerRef.current = window.setTimeout(
+        flushKeyboardScannerBuffer,
+        KEYBOARD_SCANNER_FLUSH_MS,
+      )
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true)
+    return () => {
+      clearKeyboardScannerFlushTimer()
+      window.removeEventListener('keydown', handleGlobalKeyDown, true)
+    }
+  }, [activeTopTab, qrScanActive, trySelectPersonaFromQr])
+
+  function handleHiddenPersonaScannerInputBlur() {
+    window.setTimeout(focusHiddenPersonaScannerInput, 0)
+  }
+
+  function handleHiddenPersonaScannerInputChange(event) {
+    const nextValue = event.target.value
+
+    if (trySelectPersonaFromQr(nextValue)) {
+      event.target.value = ''
+    } else if (nextValue.length > 512) {
+      event.target.value = nextValue.slice(-512)
+    }
+  }
+
+  function handleHiddenPersonaScannerInputKeyDown(event) {
+    if (event.key !== 'Enter' && event.key !== 'Tab') {
+      return
+    }
+
+    const input = event.currentTarget
+    if (input.value && trySelectPersonaFromQr(input.value)) {
+      event.preventDefault()
+      input.value = ''
+    }
+  }
+
   // Reset per-person state when selection changes
   useEffect(() => {
-    setActivePersonTab('profile')
+    setActivePersonTab(selectedPersonTargetTabRef.current || 'profile')
+    selectedPersonTargetTabRef.current = 'profile'
     setAccountSearch('')
     setQrInput('')
     setQrScanActive(false)
@@ -885,7 +1143,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     setQrInput(selectedPerson.assignedQrId || selectedPerson.qrCodeId || '')
   }, [selectedPerson])
 
-  async function runAction(action, fallbackMessage = 'Action failed.') {
+  async function runAction(action, fallbackMessage = 'A művelet sikertelen.') {
     setPending(true)
     setErrorMessage('')
     setStatusMessage('')
@@ -905,11 +1163,11 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     try {
       const result = await runAction(
         () => importPeopleFromText({ eventId, actorUid, text: importText }),
-        'Import failed.',
+        'Az importálás sikertelen.',
       )
       setImportFeedback(result)
       setImportText('')
-      setStatusMessage(`Imported ${result.importedCount} persona record${result.importedCount === 1 ? '' : 's'}. Carry-over applied to ${result.carryoverAppliedCount || 0}.`)
+      setStatusMessage(`${result.importedCount} persona importálva. Áthozott egyenleg alkalmazva: ${result.carryoverAppliedCount || 0}.`)
     } catch { /* handled */ }
   }
 
@@ -923,18 +1181,18 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
       const rows = parsePersonaExcelRows(workbook)
 
       if (!rows.length) {
-        setErrorMessage('Excel import failed: the first sheet has no rows.')
+        setErrorMessage('Excel import sikertelen: az első munkalapon nincs sor.')
         return
       }
 
       const result = await runAction(
         () => importPeopleFromRows({ eventId, actorUid, rows }),
-        'Excel import failed.',
+        'Excel import sikertelen.',
       )
       setImportFeedback(result)
-      setStatusMessage(`Imported ${result.importedCount} persona record${result.importedCount === 1 ? '' : 's'} from Excel. Carry-over applied to ${result.carryoverAppliedCount || 0}.`)
+      setStatusMessage(`${result.importedCount} persona importálva Excelből. Áthozott egyenleg alkalmazva: ${result.carryoverAppliedCount || 0}.`)
     } catch (error) {
-      setErrorMessage(error?.message || 'Excel import failed.')
+      setErrorMessage(error?.message || 'Excel import sikertelen.')
     }
   }
 
@@ -943,9 +1201,9 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     try {
       await runAction(
         () => updatePersonRecord({ eventId, actorUid, personId: selectedPerson.id, ...editState }),
-        'Saving the persona failed.',
+        'A persona mentése sikertelen.',
       )
-      setStatusMessage('Persona details updated.')
+      setStatusMessage('Persona adatai frissítve.')
     } catch { /* handled */ }
   }
 
@@ -954,9 +1212,9 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     try {
       await runAction(
         () => deletePersonRecord({ eventId, actorUid, personId: selectedPerson.id }),
-        'Deleting the persona failed.',
+        'A persona törlése sikertelen.',
       )
-      setStatusMessage('Persona deleted.')
+      setStatusMessage('Persona törölve.')
     } catch { /* handled */ }
   }
 
@@ -965,9 +1223,9 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     try {
       await runAction(
         () => restorePersonRecord({ eventId, actorUid, personId: selectedPerson.id }),
-        'Restoring the persona failed.',
+        'A persona visszaállítása sikertelen.',
       )
-      setStatusMessage('Persona restored.')
+      setStatusMessage('Persona visszaállítva.')
     } catch { /* handled */ }
   }
 
@@ -986,24 +1244,24 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
             attendeeType: selectedPerson.attendeeType,
             shibboleth: selectedPerson.shibboleth || '',
           }),
-        'Linking the account failed.',
+        'A fiók hozzárendelése sikertelen.',
       )
-      setStatusMessage(linkedAuthUid ? 'Account linked to persona.' : 'Account link removed.')
+      setStatusMessage(linkedAuthUid ? 'Fiók hozzárendelve a personához.' : 'Fiók leválasztva.')
     } catch { /* handled */ }
   }
 
   async function handleGenerateQrBatch() {
     const count = Number.parseInt(qrGenerationCount, 10)
     if (!Number.isInteger(count) || count <= 0) {
-      setErrorMessage('QR batch count must be a positive integer.')
+      setErrorMessage('A QR adag darabszámának pozitív egész számnak kell lennie.')
       return
     }
     try {
       const result = await runAction(
-        () => generateQrCredentials({ eventId, count, appBaseUrl }),
-        'Generating QR credentials failed.',
+        () => generateQrCredentials({ eventId, count }),
+        'A QR azonosítók generálása sikertelen.',
       )
-      setStatusMessage(`Generated ${result.count} unassigned QR credential${result.count === 1 ? '' : 's'}.`)
+      setStatusMessage(`${result.count} szabad QR azonosító generálva.`)
     } catch { /* handled */ }
   }
 
@@ -1011,12 +1269,12 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     if (!selectedPerson) return
     try {
       const result = await runAction(
-        () => assignQrToPerson({ eventId, personId: selectedPerson.id, qrInput: rawValue, appBaseUrl }),
-        'Assigning the QR credential failed.',
+        () => assignQrToPerson({ eventId, personId: selectedPerson.id, qrInput: rawValue }),
+        'A QR azonosító hozzárendelése sikertelen.',
       )
       const code = result?.credential?.code || `${rawValue}`.trim()
       setQrInput(code)
-      setStatusMessage(`QR credential ${code} assigned.`)
+      setStatusMessage(`${code} QR azonosító hozzárendelve.`)
     } catch { /* handled */ }
   }
 
@@ -1025,10 +1283,10 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     try {
       await runAction(
         () => revokeQrForPerson({ eventId, personId: selectedPerson.id }),
-        'Revoking the QR credential failed.',
+        'A QR azonosító visszavonása sikertelen.',
       )
       setQrInput('')
-      setStatusMessage('QR credential revoked.')
+      setStatusMessage('QR azonosító visszavonva.')
     } catch { /* handled */ }
   }
 
@@ -1037,9 +1295,9 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     try {
       await runAction(
         () => topUpPersonBalance({ eventId, actorUid, personId: selectedPerson.id, amount }),
-        'Top-up failed.',
+        'A feltöltés sikertelen.',
       )
-      setStatusMessage(`Applied ${formatHuf(amount)} top-up.`)
+      setStatusMessage(`${formatHuf(amount)} feltöltés jóváírva.`)
     } catch { /* handled */ }
   }
 
@@ -1047,41 +1305,41 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     if (!selectedPerson) return
     const amount = parseHufInteger(customTopupAmount)
     if (!Number.isInteger(amount) || amount <= 0) {
-      setErrorMessage('Custom top-up amount must be a positive integer HUF value.')
+      setErrorMessage('Az egyedi feltöltés összegének pozitív egész HUF értéknek kell lennie.')
       return
     }
     try {
       await runAction(
         () => topUpPersonBalance({ eventId, actorUid, personId: selectedPerson.id, amount }),
-        'Custom top-up failed.',
+        'Az egyedi feltöltés sikertelen.',
       )
       setCustomTopupAmount('')
-      setStatusMessage(`Applied custom top-up of ${formatHuf(amount)}.`)
+      setStatusMessage(`${formatHuf(amount)} egyedi feltöltés jóváírva.`)
     } catch { /* handled */ }
   }
 
   function handleExportPersonas() {
     if (visiblePeople.length === 0) {
-      setErrorMessage('No personas to export.')
+      setErrorMessage('Nincs exportálható persona.')
       return
     }
     try {
       const rows = visiblePeople.map((person) => ({
-        Name: person.displayName || '',
-        Team: person.team || '',
-        Type: person.attendeeType || '',
+        Nev: person.displayName || '',
+        Csapat: person.team || '',
+        Tipus: person.attendeeType || '',
         Shibboleth: person.shibboleth || '',
       }))
       const sheet = XLSX.utils.json_to_sheet(rows, {
-        header: ['Name', 'Team', 'Type', 'Shibboleth'],
+        header: ['Nev', 'Csapat', 'Tipus', 'Shibboleth'],
       })
       const workbook = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(workbook, sheet, 'Personas')
       const stamp = new Date().toISOString().slice(0, 10)
       XLSX.writeFile(workbook, `personas-${eventId}-${stamp}.xlsx`)
-      setStatusMessage(`Exported ${rows.length} persona${rows.length === 1 ? '' : 's'}.`)
+      setStatusMessage(`${rows.length} persona exportálva.`)
     } catch (error) {
-      setErrorMessage(error?.message || 'Persona export failed.')
+      setErrorMessage(error?.message || 'Persona export sikertelen.')
     }
   }
 
@@ -1089,25 +1347,25 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
     if (!selectedPerson) return
     const amount = parseHufInteger(manualAmount)
     if (!Number.isInteger(amount) || amount === 0) {
-      setErrorMessage('Manual adjustment amount must be a non-zero integer HUF value.')
+      setErrorMessage('A kézi korrekció összegének nullától eltérő egész HUF értéknek kell lennie.')
       return
     }
     try {
       await runAction(
         () => adjustPersonBalance({ eventId, actorUid, personId: selectedPerson.id, amount, reason: manualReason }),
-        'Manual balance adjustment failed.',
+        'A kézi egyenlegkorrekció sikertelen.',
       )
       setManualAmount('')
       setManualReason('')
-      setStatusMessage('Manual balance adjustment applied.')
+      setStatusMessage('Kézi egyenlegkorrekció jóváírva.')
     } catch { /* handled */ }
   }
 
   const personSubTabs = [
-    { id: 'profile', label: 'Profile' },
-    { id: 'account', label: 'Account' },
+    { id: 'profile', label: 'Profil' },
+    { id: 'account', label: 'Fiók' },
     { id: 'qr', label: 'QR' },
-    { id: 'balance', label: 'Balance' },
+    { id: 'balance', label: 'Egyenleg' },
   ]
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -1117,57 +1375,32 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
       {errorMessage ? <div className="error-banner" style={{ marginBottom: '12px' }}>{errorMessage}</div> : null}
       {statusMessage ? <div className="status-inline" style={{ marginBottom: '12px' }}>{statusMessage}</div> : null}
 
-      {/* Top-level tab bar */}
-      <div className="tab-bar" style={{ marginBottom: '20px' }}>
-        <button
-          type="button"
-          className={`tab-btn${activeTopTab === 'personas' ? ' active' : ''}`}
-          onClick={() => setActiveTopTab('personas')}
-        >
-          Personas
-        </button>
-        <button
-          type="button"
-          className={`tab-btn${activeTopTab === 'qrpool' ? ' active' : ''}`}
-          onClick={() => setActiveTopTab('qrpool')}
-        >
-          QR Pool
-          {unassignedQrCredentials.length > 0 && (
-            <span className="kds-count-pill" style={{ marginLeft: '6px' }}>{unassignedQrCredentials.length}</span>
-          )}
-        </button>
-      </div>
-
       {/* ── PERSONAS TAB ── */}
       {activeTopTab === 'personas' && (
         <>
-          {/* Stats row */}
-          <div className="detail-grid" style={{ marginBottom: '16px' }}>
-            <span className="event-pill" style={{ background: 'color-mix(in srgb, var(--success) 10%, transparent)', borderColor: '#86efac', color: '#15803d' }}>
-              Complete: {personaCounts.complete}
-            </span>
-            <span className="event-pill" style={{ background: '#fefce8', borderColor: '#fde047', color: '#92400e' }}>
-              Partial: {personaCounts.partial}
-            </span>
-            <span className="event-pill">
-              Incomplete: {personaCounts.incomplete}
-            </span>
-            <span className="event-pill">
-              Unlinked accounts: {unlinkedAccounts.length}
-            </span>
-          </div>
-
+          <input
+            ref={hiddenPersonaScannerInputRef}
+            className="pos-hidden-scanner-input"
+            type="text"
+            autoComplete="off"
+            inputMode="none"
+            aria-hidden="true"
+            tabIndex={-1}
+            onBlur={handleHiddenPersonaScannerInputBlur}
+            onChange={handleHiddenPersonaScannerInputChange}
+            onKeyDown={handleHiddenPersonaScannerInputKeyDown}
+          />
           {/* Three-column grid */}
           <div className="three-column-grid">
             {/* Col 1: Import */}
             <section className="panel">
-              <h4 className="card-title">Import personas</h4>
+              <h4 className="card-title">Personák importálása</h4>
               <p className="helper-text">
-                One attendee per line: <strong>name, team, type, shibboleth</strong> (tab, semicolon, or comma).
+                Soronként egy résztvevő: <strong>név, csapat, típus, shibboleth</strong> (tab, pontosvessző vagy vessző).
               </p>
               <form className="form-grid" onSubmit={handleImport} style={{ marginTop: '12px' }}>
                 <div className="field">
-                  <label htmlFor="peopleImportExcel">Excel file</label>
+                  <label htmlFor="peopleImportExcel">Excel fájl</label>
                   <input
                     id="peopleImportExcel"
                     type="file"
@@ -1176,36 +1409,36 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                     disabled={pending}
                   />
                   <p className="helper-text">
-                    Uses the first sheet. Header row can be name, team, type, shibboleth.
+                    Az első munkalapot használja. A fejléc lehet name, team, type, shibboleth.
                   </p>
                 </div>
                 <div className="field">
-                  <label htmlFor="peopleImport">Paste rows</label>
+                  <label htmlFor="peopleImport">Sorok beillesztése</label>
                   <textarea
                     id="peopleImport"
                     className="text-area"
                     value={importText}
                     onChange={(e) => setImportText(e.target.value)}
-                    placeholder={'John Doe\tRed\tfreshman\tSHIB-123'}
+                    placeholder={'Kiss Anna\tPiros\tfreshman\tSHIB-123'}
                     rows={10}
                   />
                 </div>
                 <div className="button-row">
                   <button type="submit" className="primary-button" disabled={pending || !importText.trim()}>
-                    Import
+                    Importálás
                   </button>
                 </div>
               </form>
               {importFeedback && (
                 <div className="stack-block" style={{ gap: '8px', marginTop: '12px' }}>
                   <p className="helper-text">
-                    Imported {importFeedback.importedCount} rows. Carry-over applied to {importFeedback.carryoverAppliedCount || 0}. Rejected {importFeedback.rejectedRows.length}.
+                    {importFeedback.importedCount} sor importálva. Áthozott egyenleg alkalmazva: {importFeedback.carryoverAppliedCount || 0}. Elutasítva: {importFeedback.rejectedRows.length}.
                   </p>
                   {importFeedback.rejectedRows.length > 0 && (
                     <ul className="detail-list">
                       {importFeedback.rejectedRows.slice(0, 5).map((row) => (
                         <li key={`${row.lineNumber}-${row.reason}`}>
-                          <strong>Line {row.lineNumber}</strong>
+                          <strong>{row.lineNumber}. sor</strong>
                           <span>{row.reason}</span>
                         </li>
                       ))}
@@ -1217,20 +1450,19 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
 
             {/* Col 2: People list */}
             <section className="panel">
-              <div className="split-header" style={{ marginBottom: '10px' }}>
-                <div>
-                  <h4 className="card-title">Personas</h4>
-                  <p className="helper-text">{visiblePeople.length} record{visiblePeople.length !== 1 ? 's' : ''}</p>
+              <div className="split-header personas-list-header" style={{ marginBottom: '10px' }}>
+                <div className="personas-list-title">
+                  <h4 className="card-title">Personák</h4>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div className="personas-list-actions">
                   <button
                     type="button"
                     className="secondary-button btn-sm"
                     onClick={handleExportPersonas}
                     disabled={visiblePeople.length === 0}
-                    title="Export personas to Excel"
+                    title="Personák exportálása Excelbe"
                   >
-                    ↓ Export
+                    Export
                   </button>
                   <label className="checkbox-row">
                     <input
@@ -1238,12 +1470,28 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                       checked={showDeleted}
                       onChange={(e) => setShowDeleted(e.target.checked)}
                     />
-                    <span style={{ fontSize: '0.78rem' }}>Deleted</span>
+                    <span style={{ fontSize: '0.78rem' }}>Töröltek</span>
                   </label>
                 </div>
               </div>
+              <div className="personas-counter-strip" aria-label="Persona számlálók">
+                <span className="event-pill personas-counter-pill complete">C {personaCounts.complete}</span>
+                <span className="event-pill personas-counter-pill partial">P {personaCounts.partial}</span>
+                <span className="event-pill personas-counter-pill">I {personaCounts.incomplete}</span>
+                <span className="event-pill personas-counter-pill">Fiók nélkül {unlinkedAccounts.length}</span>
+              </div>
+              <div className="field personas-search-field">
+                <label htmlFor="personaSearch">Keresés vagy QR beolvasás</label>
+                <input
+                  id="personaSearch"
+                  value={personaSearch}
+                  onChange={(event) => setPersonaSearch(event.target.value)}
+                  placeholder="Név, csapat, shibboleth, QR kód vagy QR link"
+                  autoComplete="off"
+                />
+              </div>
               <div className="record-list">
-                {visiblePeople.map((person) => {
+                {filteredVisiblePeople.map((person) => {
                   const completeness = buildPersonaCompleteness(person)
                   const colors = COMPLETENESS_COLORS[completeness]
                   return (
@@ -1251,7 +1499,7 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                       key={person.id}
                       type="button"
                       className={`record-row${selectedPersonId === person.id ? ' selected' : ''}`}
-                      onClick={() => setSelectedPersonId(person.id)}
+                      onClick={() => selectPerson(person.id)}
                     >
                       <span style={{ display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
                         <CompletenessDot completeness={completeness} />
@@ -1283,7 +1531,10 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                   )
                 })}
                 {visiblePeople.length === 0 && (
-                  <p className="helper-text">No personas yet. Import from the left panel.</p>
+                  <p className="helper-text">Még nincs persona. Importálj a bal oldali panelen.</p>
+                )}
+                {visiblePeople.length > 0 && filteredVisiblePeople.length === 0 && (
+                  <p className="helper-text">Nincs a keresésnek megfelelő persona.</p>
                 )}
               </div>
             </section>
@@ -1292,9 +1543,9 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
             <section className="panel">
               {!selectedPerson ? (
                 <StatusCard
-                  title="Select a persona"
+                  title="Válassz personát"
                   tone="warning"
-                  body="Click a persona from the list to view and edit their profile, account link, QR credential, and balance."
+                  body="Kattints egy personára a listában a profil, fiókkapcsolat, QR azonosító és egyenleg kezeléséhez."
                 />
               ) : (
                 <>
@@ -1305,13 +1556,13 @@ export function PeopleManagementPanel({ eventId, actorUid }) {
                       <div>
                         <div style={{ fontWeight: 800, fontSize: '1rem' }}>{selectedPerson.displayName}</div>
                         <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
-                          {selectedPerson.team || 'No team'} · {selectedPerson.attendeeType}
+                          {selectedPerson.team || 'Nincs csapat'} · {getAttendeeTypeLabel(selectedPerson.attendeeType)}
                           {selectedPerson.shibboleth ? ` · ${selectedPerson.shibboleth}` : ''} · {formatHuf(selectedPerson.balance || 0)}
                         </div>
                       </div>
                     </div>
                     <span className="event-pill" style={{ textTransform: 'capitalize', flexShrink: 0 }}>
-                      {selectedPerson.recordStatus}
+                      {getStatusLabel(selectedPerson.recordStatus)}
                     </span>
                   </div>
 

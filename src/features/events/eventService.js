@@ -91,6 +91,7 @@ async function cloneCatalogFromSourceEvent({
         isActive: Boolean(product.isActive),
         isTemporarilyUnavailable: Boolean(product.isTemporarilyUnavailable),
         modifierTemplateId: product.modifierTemplateId || null,
+        isDRS: Boolean(product.isDRS),
         actorUid,
       }),
     )

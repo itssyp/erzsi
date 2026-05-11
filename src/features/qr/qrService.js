@@ -3,7 +3,7 @@ import { httpsCallable } from 'firebase/functions'
 import { db, functions } from '../../lib/firebase'
 import { EVENT_SUBCOLLECTIONS, getEventCollectionPath } from '../../lib/firestorePaths'
 import { normalizeQrCredentialRecord, QR_CREDENTIAL_STATUSES } from './qrModels'
-import { normalizeQrInput } from './qrLinks'
+import { QR_PUBLIC_BASE_URL, normalizeQrInput } from './qrLinks'
 
 const generateQrCredentialsCallable = httpsCallable(functions, 'generateQrCredentials')
 const assignQrCredentialToPersonaCallable = httpsCallable(functions, 'assignQrCredentialToPersona')
@@ -26,11 +26,11 @@ export function subscribeToQrCredentials(eventId, onNext, onError) {
   )
 }
 
-export async function generateQrCredentials({ eventId, count, appBaseUrl }) {
+export async function generateQrCredentials({ eventId, count }) {
   const result = await generateQrCredentialsCallable({
     eventId,
     count,
-    appBaseUrl,
+    appBaseUrl: QR_PUBLIC_BASE_URL,
   })
 
   return result.data
@@ -40,14 +40,13 @@ export async function assignQrToPerson({
   eventId,
   personId,
   qrInput,
-  appBaseUrl,
 }) {
   const normalizedQr = normalizeQrInput(qrInput)
   const result = await assignQrCredentialToPersonaCallable({
     eventId,
     personId,
     qrInput: normalizedQr,
-    appBaseUrl,
+    appBaseUrl: QR_PUBLIC_BASE_URL,
   })
 
   return result.data
@@ -67,7 +66,7 @@ export async function selfAssignQrCredential({ eventId, qrInput }) {
   const result = await selfAssignQrCredentialCallable({
     eventId,
     qrInput: normalizedQr,
-    appBaseUrl: window.location.origin,
+    appBaseUrl: QR_PUBLIC_BASE_URL,
   })
 
   return result.data

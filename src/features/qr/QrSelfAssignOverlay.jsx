@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQrScanner } from './useQrScanner'
 import { selfAssignQrCredential } from './qrService'
-import { normalizeQrInput } from './qrLinks'
+import { QR_CODE_LENGTH, normalizeQrInput } from './qrLinks'
 
 const STEPS = {
   scan: 'scan',
@@ -165,7 +165,7 @@ export function QrSelfAssignOverlay({ eventId, onClose }) {
             {mode === 'manual' && (
               <form className="qr-assign-manual-form" onSubmit={handleManualSubmit}>
                 <label htmlFor="qrManualCode" className="qr-assign-manual-label">
-                  5 jegyű kód
+                  {QR_CODE_LENGTH} jegyű kód
                 </label>
                 <div className="qr-assign-manual-row">
                   <input
@@ -173,18 +173,18 @@ export function QrSelfAssignOverlay({ eventId, onClose }) {
                     className="qr-assign-manual-input"
                     type="text"
                     inputMode="numeric"
-                    pattern="\d{5}"
-                    maxLength={5}
+                    pattern={`\\d{${QR_CODE_LENGTH}}`}
+                    maxLength={QR_CODE_LENGTH}
                     value={manualCode}
-                    onChange={(e) => setManualCode(e.target.value.replace(/\D/g, '').slice(0, 5))}
-                    placeholder="00000"
+                    onChange={(e) => setManualCode(e.target.value.replace(/\D/g, '').slice(0, QR_CODE_LENGTH))}
+                    placeholder="0000"
                     autoFocus
                     disabled={pending}
                   />
                   <button
                     type="submit"
                     className="primary-button qr-assign-manual-submit"
-                    disabled={pending || manualCode.length !== 5}
+                    disabled={pending || manualCode.length !== QR_CODE_LENGTH}
                   >
                     {pending ? 'Hozzárendelés…' : 'Hozzárendelés'}
                   </button>

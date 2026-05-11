@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "unit": "node 01-unit-tests.js",
+    "qr-carryover": "node 05-qr-carryover-regression.js",
     "emulator": "node run-emulator-tests.js",
     "all": "node run-all.js"
   },

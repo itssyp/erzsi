@@ -14,8 +14,10 @@ const db = getFirestore()
 const bootstrapAdminEmails = defineString('BOOTSTRAP_ADMIN_EMAILS')
 const callableOptions = { cors: true }
 
-const QR_CODE_MIN = 10000
-const QR_CODE_MAX_EXCLUSIVE = 100000
+const QR_CODE_LENGTH = 4
+const QR_CODE_MIN = 1000
+const QR_CODE_MAX_EXCLUSIVE = 10000
+const QR_PUBLIC_BASE_URL = 'https://kasszaserzsi.hu'
 const MAX_QR_GENERATION_BATCH = 250
 const MAX_QR_INPUT_LENGTH = 512
 
@@ -115,30 +117,8 @@ function normalizeShibbolethKey(rawValue) {
     .replace(/^-+|-+$/g, '')
 }
 
-function sanitizeAppBaseUrl(rawValue) {
-  const value = typeof rawValue === 'string' ? rawValue.trim() : ''
-
-  if (!value) {
-    throw new HttpsError('invalid-argument', 'appBaseUrl is required.')
-  }
-
-  let parsedUrl
-
-  try {
-    parsedUrl = new URL(value)
-  } catch {
-    throw new HttpsError('invalid-argument', 'appBaseUrl must be a valid absolute URL.')
-  }
-
-  if (!/^https?:$/.test(parsedUrl.protocol)) {
-    throw new HttpsError('invalid-argument', 'appBaseUrl must use http or https.')
-  }
-
-  return parsedUrl.origin
-}
-
-function buildQrCredentialLink(appBaseUrl, code) {
-  return `${appBaseUrl}/qr/${code}`
+function buildQrCredentialLink(code) {
+  return `${QR_PUBLIC_BASE_URL}/qr/${code}`
 }
 
 function coerceCount(rawValue) {
@@ -165,19 +145,27 @@ function normalizeScannedQrCode(rawValue) {
     throw new HttpsError('invalid-argument', 'QR input is too long.')
   }
 
-  if (/^\d{5}$/.test(value)) {
+  const qrCodePattern = new RegExp(`^\\d{${QR_CODE_LENGTH}}$`)
+
+  if (qrCodePattern.test(value)) {
     return value
+  }
+
+  const embeddedQrPathMatch = value.match(new RegExp(`/qr/(\\d{${QR_CODE_LENGTH}})(?:[/?#\\s]|$)`, 'i'))
+
+  if (embeddedQrPathMatch?.[1]) {
+    return embeddedQrPathMatch[1]
   }
 
   try {
     const parsedUrl = new URL(value)
     const queryCandidate = parsedUrl.searchParams.get('code') || parsedUrl.searchParams.get('qr')
 
-    if (queryCandidate && /^\d{5}$/.test(queryCandidate.trim())) {
+    if (queryCandidate && qrCodePattern.test(queryCandidate.trim())) {
       return queryCandidate.trim()
     }
 
-    const pathMatch = parsedUrl.pathname.match(/\/qr\/(\d{5})\/?$/i)
+    const pathMatch = parsedUrl.pathname.match(new RegExp(`/qr/(\\d{${QR_CODE_LENGTH}})/?$`, 'i'))
 
     if (pathMatch?.[1]) {
       return pathMatch[1]
@@ -186,7 +174,7 @@ function normalizeScannedQrCode(rawValue) {
     // Fall through to the generic validation error below.
   }
 
-  throw new HttpsError('invalid-argument', 'QR input must be a 5-digit code or a supported QR link.')
+  throw new HttpsError('invalid-argument', `QR input must be a ${QR_CODE_LENGTH}-digit code or a supported QR link.`)
 }
 
 function getAccountRef(uid) {
@@ -507,7 +495,6 @@ export const generateQrCredentials = onCall(async (request) => {
   const authContext = ensureAdmin(request)
   const eventId = normalizeEventId(request.data?.eventId)
   const count = coerceCount(request.data?.count)
-  const appBaseUrl = sanitizeAppBaseUrl(request.data?.appBaseUrl)
 
   const eventSnapshot = await getEventDocRef(eventId).get()
 
@@ -529,7 +516,7 @@ export const generateQrCredentials = onCall(async (request) => {
       }
 
       const credentialRef = getQrCredentialRef(eventId, code)
-      const link = buildQrCredentialLink(appBaseUrl, code)
+      const link = buildQrCredentialLink(code)
 
       try {
         await credentialRef.create(
@@ -556,7 +543,7 @@ export const generateQrCredentials = onCall(async (request) => {
     if (!created) {
       throw new HttpsError(
         'resource-exhausted',
-        'Unable to reserve enough unique 5-digit QR codes. Retry the batch or revoke unused credentials.',
+        `Unable to reserve enough unique ${QR_CODE_LENGTH}-digit QR codes. Retry the batch or revoke unused credentials.`,
       )
     }
   }
@@ -587,10 +574,6 @@ export const assignQrCredentialToPersona = onCall(async (request) => {
   const eventId = normalizeEventId(request.data?.eventId)
   const personId = normalizePersonId(request.data?.personId)
   const qrCode = normalizeScannedQrCode(request.data?.qrInput)
-  const appBaseUrl = typeof request.data?.appBaseUrl === 'string' && request.data.appBaseUrl.trim()
-    ? sanitizeAppBaseUrl(request.data.appBaseUrl)
-    : null
-
   await db.runTransaction(async (transaction) => {
     const personRef = getPersonRef(eventId, personId)
     const credentialRef = getQrCredentialRef(eventId, qrCode)
@@ -639,7 +622,7 @@ export const assignQrCredentialToPersona = onCall(async (request) => {
       }
     }
 
-    const nextLink = credential.link || (appBaseUrl ? buildQrCredentialLink(appBaseUrl, qrCode) : '')
+    const nextLink = buildQrCredentialLink(qrCode)
 
     if (!nextLink) {
       throw new HttpsError('failed-precondition', 'QR credential link could not be determined for this assignment.')
@@ -1272,10 +1255,6 @@ export const selfAssignQrCredential = onCall(callableOptions, async (request) =>
   const uid = authContext.uid
   const eventId = normalizeEventId(request.data?.eventId)
   const qrCode = normalizeScannedQrCode(request.data?.qrInput)
-  const appBaseUrl = typeof request.data?.appBaseUrl === 'string' && request.data.appBaseUrl.trim()
-    ? sanitizeAppBaseUrl(request.data.appBaseUrl)
-    : null
-
   const eventLinkRef = db.doc(`accounts/${uid}/eventLinks/${eventId}`)
   const eventLinkSnapshot = await eventLinkRef.get()
 
@@ -1334,7 +1313,7 @@ export const selfAssignQrCredential = onCall(callableOptions, async (request) =>
       throw new HttpsError('failed-precondition', 'This QR code is already in use.')
     }
 
-    const nextLink = credential.link || (appBaseUrl ? buildQrCredentialLink(appBaseUrl, qrCode) : '')
+    const nextLink = buildQrCredentialLink(qrCode)
 
     if (!nextLink) {
       throw new HttpsError('failed-precondition', 'QR credential link could not be determined.')

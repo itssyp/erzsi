@@ -9,7 +9,7 @@ import { createAuditLogWrite } from '../audit/auditService'
 import { AUDIT_TYPES } from '../audit/auditModels'
 import { buildLedgerEntryRecord, LEDGER_ENTRY_TYPES } from '../ledger/ledgerModels'
 import { buildOrderRecord } from '../orders/orderModels'
-import { PERSON_RECORD_STATUSES } from '../people/personModels'
+import { PERSON_RECORD_STATUSES, getPersonDisplayId } from '../people/personModels'
 import { buildDrsReturnRecord, DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import {
   BASKET_STATUSES,
@@ -341,6 +341,7 @@ export async function finalizeBasket({
           personId,
           personDisplayName: person.displayName,
           personInternalId: person.internalId,
+          personDisplayId: getPersonDisplayId(person),
           quantity: drsReturnQuantity,
           balanceBefore,
           balanceAfter,

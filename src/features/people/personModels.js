@@ -113,7 +113,7 @@ export function buildPersonRestorePatch() {
 
 /**
  * Returns the preferred public identifier for a person.
- * Priority: 5-digit QR ID > Shibboleth > Internal ID
+ * Priority: QR ID > Shibboleth > Internal ID
  * @param {PersonRecord} person
  * @returns {string}
  */

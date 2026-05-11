@@ -1127,6 +1127,16 @@ textarea:disabled {
   min-height: 0;
 }
 
+.pos-hidden-scanner-input {
+  position: fixed;
+  left: -1000px;
+  top: -1000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .pos-basket-area {
   grid-column: 1 / 2;
   display: flex;
@@ -1190,6 +1200,119 @@ textarea:disabled {
 .record-list {
   display: flex;
   flex-direction: column;
+}
+
+.personas-search-field {
+  margin-bottom: 10px;
+}
+
+.personas-list-header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.personas-list-title {
+  min-width: 0;
+}
+
+.personas-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.personas-counter-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: -2px 0 10px;
+}
+
+.personas-counter-pill {
+  padding: 2px 7px;
+  font-size: 0.68rem;
+  line-height: 1.2;
+}
+
+.personas-counter-pill.complete {
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border-color: #86efac;
+  color: #15803d;
+}
+
+.personas-counter-pill.partial {
+  background: #fefce8;
+  border-color: #fde047;
+  color: #92400e;
+}
+
+.users-list-header {
+  align-items: flex-end;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.users-search-field {
+  min-width: min(320px, 100%);
+  margin: 0;
+}
+
+.registered-user-list {
+  display: grid;
+  gap: 6px;
+}
+
+.registered-user-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(150px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.registered-user-main,
+.registered-user-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.registered-user-main strong,
+.registered-user-main span,
+.registered-user-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.registered-user-main strong {
+  font-size: 0.86rem;
+}
+
+.registered-user-main span,
+.registered-user-meta span {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.registered-user-pills {
+  display: flex;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.registered-user-pills .event-pill {
+  padding: 2px 7px;
+  font-size: 0.68rem;
+  line-height: 1.2;
 }
 
 .record-row {
@@ -4257,6 +4380,96 @@ textarea:disabled {
   overscroll-behavior: contain;
 }
 
+/* ── Gyros stage ─────────────────────────────────────────────────────────── */
+.gyros-stage {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  justify-items: center;
+  align-items: center;
+  gap: clamp(2px, 0.8vh, 6px);
+  min-height: 0;
+  height: 100%;
+  padding: clamp(10px, 2vh, 16px) 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Tortilla wrap sprites — shared base */
+.gyros-wrap {
+  width: min(300px, 100%);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Bottom tortilla: flat oval flatbread */
+.gyros-wrap--bottom {
+  height: clamp(18px, 4.5vh, 28px);
+  position: relative;
+}
+.gyros-wrap--bottom::before {
+  content: '';
+  display: block;
+  width: 92%;
+  height: 100%;
+  border-radius: 50% / 38%;
+  background: linear-gradient(180deg, #f5d78e 0%, #d4a832 60%, #c0922a 100%);
+  border: 1.5px solid #b07820;
+  box-shadow:
+    inset 0 4px 0 rgba(255,255,255,0.22),
+    inset 0 -3px 0 rgba(0,0,0,0.10),
+    0 3px 8px rgba(140,80,10,0.18);
+}
+/* Sesame-dot texture dots */
+.gyros-wrap--bottom::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 70%;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(160, 100, 20, 0.18);
+  box-shadow:
+    -18px  0px 0 0px rgba(160,100,20,0.12),
+     18px  0px 0 0px rgba(160,100,20,0.12),
+      0px -4px 0 0px rgba(160,100,20,0.10),
+      0px  4px 0 0px rgba(160,100,20,0.10);
+}
+
+/* Top tortilla: slightly folded / rolled look */
+.gyros-wrap--top {
+  height: clamp(16px, 4vh, 24px);
+  position: relative;
+}
+.gyros-wrap--top::before {
+  content: '';
+  display: block;
+  width: 86%;
+  height: 100%;
+  /* Less perfectly round — the folded end is tighter */
+  border-radius: 46% 54% 38% 62% / 42% 42% 58% 58%;
+  background: linear-gradient(170deg, #f8e4a4 0%, #e0b840 50%, #c8962c 100%);
+  border: 1.5px solid #b07820;
+  box-shadow:
+    inset 0 5px 0 rgba(255,255,255,0.28),
+    inset 0 -2px 0 rgba(0,0,0,0.10),
+    0 3px 8px rgba(140,80,10,0.18);
+}
+/* Fold crease line on top tortilla */
+.gyros-wrap--top::after {
+  content: '';
+  position: absolute;
+  bottom: 30%;
+  left: 12%;
+  right: 12%;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(160, 100, 20, 0.20);
+}
+
 .burger-bun,
 .burger-layer {
   width: min(300px, 100%);
@@ -4280,29 +4493,18 @@ textarea:disabled {
 
 .burger-bun--top span {
   border-radius: 80px 80px 22px 22px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 4% 2.4% at 24% 27%, rgba(255, 247, 237, 0.95) 0 95%, transparent 100%),
+    radial-gradient(ellipse 4% 2.4% at 40% 18%, rgba(255, 247, 237, 0.86) 0 95%, transparent 100%),
+    radial-gradient(ellipse 4% 2.4% at 58% 31%, rgba(255, 247, 237, 0.82) 0 95%, transparent 100%),
+    radial-gradient(ellipse 4% 2.4% at 73% 20%, rgba(255, 247, 237, 0.88) 0 95%, transparent 100%),
+    linear-gradient(180deg, #f6c46a 0%, #d9902f 100%);
 }
 
 .burger-bun--top span::before,
 .burger-bun--top span::after {
-  content: '';
-  position: absolute;
-  top: 16px;
-  width: 7px;
-  height: 3px;
-  border-radius: 999px;
-  background: rgba(255, 247, 237, 0.95);
-  box-shadow:
-    42px -6px 0 rgba(255, 247, 237, 0.85),
-    88px 3px 0 rgba(255, 247, 237, 0.82),
-    138px -5px 0 rgba(255, 247, 237, 0.88);
-}
-
-.burger-bun--top span::before {
-  left: 26%;
-}
-
-.burger-bun--top span::after {
-  right: 28%;
+  display: none;
 }
 
 .burger-bun--bottom {
@@ -4375,6 +4577,60 @@ textarea:disabled {
   background: linear-gradient(180deg, #7c2d12 0%, #4a1d0b 100%);
 }
 
+/* ── Gyros shaved meat — stacked individual thin strips ─────────────────── */
+/* The sprite element is a transparent height-setter; the four visible meat
+   strips are built from ::before, ::after, and their box-shadows so each
+   can have its own width, x-position and colour variation. */
+.burger-layer--gyrosmeat {
+  overflow: visible;
+  filter: drop-shadow(0 2px 4px rgba(60, 16, 2, 0.60));
+}
+.burger-layer--gyrosmeat::after {
+  content: none; /* no wrapper pseudo-element needed */
+}
+
+.burger-layer--gyrosmeat .burger-layer-sprite {
+  position: relative;
+  overflow: visible;
+  /* Just tall enough to house four strips + gaps */
+  height: clamp(30px, 7.5vh, 44px);
+  width: 82%;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ── Strips 1 & 2 (bottom pair) ── */
+.burger-layer--gyrosmeat .burger-layer-sprite::before {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 62%;
+  height: 7px;
+  border-radius: 3px 7px 4px 6px / 6px 3px 7px 4px;
+  background: linear-gradient(90deg,
+    #5c2a0e 0%, #7c3510 40%, #6b2e10 100%);
+  /* Strip 2: 10px above, shifted right, slightly narrower */
+  box-shadow: 8px -11px 0 -1px #8b4212;
+}
+
+/* ── Strips 3 & 4 (top pair — lighter, "freshly shaved") ── */
+.burger-layer--gyrosmeat .burger-layer-sprite::after {
+  content: '';
+  position: absolute;
+  bottom: 19px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70%;
+  height: 7px;
+  border-radius: 6px 3px 7px 4px / 3px 7px 4px 6px;
+  background: linear-gradient(90deg,
+    #9a5028 0%, #c47840 45%, #a05828 100%);
+  /* Strip 4: 10px above, shifted left, slightly narrower */
+  box-shadow: -7px -11px 0 -1px #d08848;
+}
+
 .burger-layer--cheese .burger-layer-sprite {
   height: clamp(16px, 3.8vh, 24px);
   border-radius: 10px;
@@ -4418,11 +4674,217 @@ textarea:disabled {
     repeating-linear-gradient(90deg, #b91c1c 0 22px, #fecaca 22px 30px, #7f1d1d 30px 48px);
 }
 
-.burger-layer--sauce .burger-layer-sprite {
-  height: clamp(12px, 3vh, 18px);
+/* ── Sauce splatter sprites ─────────────────────────────────────────────── */
+/* Main body: flat organic blob with tapered ends.
+   ::before / ::after are tiny circles (border-radius:50%) so their
+   box-shadows become round droplets scattered around the main splash. */
+
+.burger-layer--ketchup .burger-layer-sprite {
+  position: relative;
+  overflow: visible;
+  height: clamp(10px, 2.6vh, 16px);
+  width: 84%;
+  /* Tapered / pointed ends, wavy silhouette */
+  border-radius: 12% 68% 58% 16% / 48% 55% 45% 52%;
+  background: #dc2626;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,0.15), 0 1px 4px rgba(185,28,28,0.3);
+}
+.burger-layer--ketchup .burger-layer-sprite::before {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #dc2626;
+  top: -9px; right: 22%;
+  /* Round droplets flung upward / right */
+  box-shadow:
+     12px   2px 0  0px #dc2626,
+     22px  -5px 0 -1px #dc2626,
+     32px  -1px 0 -1px #b91c1c,
+      7px -13px 0 -2px #dc2626,
+     18px -11px 0 -2px #ef4444,
+     38px  -7px 0 -2px #dc2626;
+}
+.burger-layer--ketchup .burger-layer-sprite::after {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #dc2626;
+  bottom: -8px; left: 16%;
+  /* Round droplets flung downward / left */
+  box-shadow:
+    -11px   3px 0 -1px #dc2626,
+    -21px   5px 0 -1px #ef4444,
+    -30px   2px 0 -2px #dc2626,
+      8px   7px 0 -1px #dc2626,
+    -15px  10px 0 -2px #b91c1c,
+    -38px   4px 0 -2px #dc2626;
+}
+
+.burger-layer--mustard .burger-layer-sprite {
+  position: relative;
+  overflow: visible;
+  height: clamp(10px, 2.5vh, 15px);
+  width: 76%;
+  border-radius: 60% 18% 14% 62% / 52% 48% 52% 48%;
+  background: #ca8a04;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,0.12), 0 1px 4px rgba(161,98,7,0.3);
+}
+.burger-layer--mustard .burger-layer-sprite::before {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #ca8a04;
+  top: -8px; left: 20%;
+  box-shadow:
+    -10px   3px 0  0px #d97706,
+    -20px  -3px 0 -1px #ca8a04,
+    -30px   1px 0 -1px #a16207,
+     -6px -12px 0 -2px #d97706,
+    -16px -10px 0 -2px #ca8a04,
+    -34px  -6px 0 -2px #d97706;
+}
+.burger-layer--mustard .burger-layer-sprite::after {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #ca8a04;
+  bottom: -7px; right: 18%;
+  box-shadow:
+     12px   4px 0 -1px #d97706,
+     22px   6px 0 -1px #ca8a04,
+     30px   2px 0 -2px #a16207,
+      6px   8px 0 -1px #d97706,
+     18px  10px 0 -2px #ca8a04,
+     36px   5px 0 -2px #d97706;
+}
+
+.burger-layer--mayo .burger-layer-sprite {
+  position: relative;
+  overflow: visible;
+  height: clamp(10px, 2.4vh, 15px);
   width: 70%;
-  border-radius: 44% 56% 48% 52% / 52% 40% 60% 48%;
-  background: linear-gradient(90deg, #ef4444 0%, #f97316 48%, #facc15 100%);
+  border-radius: 55% 45% 52% 48% / 36% 60% 40% 64%;
+  background: #fef9ec;
+  border: 1.5px solid rgba(150, 110, 30, 0.18);
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.08);
+}
+.burger-layer--mayo .burger-layer-sprite::before {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #fef9ec;
+  top: -8px; right: 25%;
+  box-shadow:
+     11px   2px 0  0px #fef9ec,
+     20px  -4px 0 -1px #fffbf2,
+     28px   0px 0 -1px #fef9ec,
+      6px -11px 0 -2px #fffbf2,
+     17px -10px 0 -2px #fef9ec,
+     34px  -5px 0 -2px #fffbf2;
+}
+.burger-layer--mayo .burger-layer-sprite::after {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #fef9ec;
+  bottom: -7px; left: 20%;
+  box-shadow:
+    -10px   3px 0 -1px #fef9ec,
+    -19px   5px 0 -1px #fffbf2,
+    -27px   1px 0 -2px #fef9ec,
+      7px   7px 0 -1px #fffbf2,
+    -14px   9px 0 -2px #fef9ec,
+    -32px   4px 0 -2px #fffbf2;
+}
+
+/* ── Yogurt drizzle ─────────────────────────────────────────────────────── */
+.burger-layer--yogurt .burger-layer-sprite {
+  position: relative;
+  overflow: visible;
+  height: 5px;
+  width: 65%;
+  border-radius: 999px;
+  background: rgba(255, 253, 235, 0.92);
+  border: 1px solid rgba(200, 170, 80, 0.18);
+  transform: rotate(-6deg);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+/* Second drizzle stroke */
+.burger-layer--yogurt .burger-layer-sprite::before {
+  content: '';
+  position: absolute;
+  width: 80%;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 253, 235, 0.88);
+  border: 1px solid rgba(200, 170, 80, 0.12);
+  top: 7px;
+  left: 10%;
+  transform: rotate(10deg);
+}
+/* Third drizzle stroke + drip dots */
+.burger-layer--yogurt .burger-layer-sprite::after {
+  content: '';
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: rgba(255, 253, 235, 0.9);
+  top: 14px;
+  left: 30%;
+  box-shadow:
+    10px  2px 0  0px rgba(255,253,235,0.85),
+    22px -1px 0 -1px rgba(255,253,235,0.80),
+    35px  3px 0 -1px rgba(255,253,235,0.75),
+    -8px  5px 0 -1px rgba(255,253,235,0.80),
+    48px  0px 0 -2px rgba(255,253,235,0.70);
+}
+
+/* ── Spicy sauce splatter (orange-red) ──────────────────────────────────── */
+.burger-layer--spicy .burger-layer-sprite {
+  position: relative;
+  overflow: visible;
+  height: clamp(10px, 2.6vh, 16px);
+  width: 78%;
+  border-radius: 20% 58% 44% 30% / 55% 40% 60% 45%;
+  background: #ea580c;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,0.15), 0 1px 4px rgba(234,88,12,0.35);
+}
+.burger-layer--spicy .burger-layer-sprite::before {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #ea580c;
+  top: -8px; right: 24%;
+  box-shadow:
+     13px   2px 0  0px #ea580c,
+     23px  -5px 0 -1px #f97316,
+     33px  -1px 0 -1px #c2410c,
+      8px -13px 0 -2px #ea580c,
+     19px -11px 0 -2px #f97316,
+     40px  -7px 0 -2px #ea580c;
+}
+.burger-layer--spicy .burger-layer-sprite::after {
+  content: '';
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #ea580c;
+  bottom: -8px; left: 18%;
+  box-shadow:
+    -12px   4px 0 -1px #f97316,
+    -22px   6px 0 -1px #ea580c,
+    -32px   2px 0 -2px #c2410c,
+      9px   7px 0 -1px #ea580c,
+    -16px  11px 0 -2px #f97316,
+    -40px   5px 0 -2px #ea580c;
 }
 
 .burger-empty-layer {
@@ -4802,6 +5264,15 @@ textarea:disabled {
   .record-list.compact,
   .record-list.stacked {
     gap: 8px;
+  }
+
+  .registered-user-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .registered-user-pills {
+    justify-content: flex-start;
   }
 
   .hero-title {
@@ -5959,7 +6430,12 @@ textarea:disabled {
 .game-pdot--tomato.caught { background: #f87171; border-color: #ef4444; }
 .game-pdot--onion.caught  { background: #c084fc; border-color: #a855f7; }
 .game-pdot--bacon.caught  { background: #fb923c; border-color: #f97316; }
-.game-pdot--sauce.caught  { background: #f87171; border-color: #ef4444; }
+.game-pdot--ketchup.caught { background: #ef4444; border-color: #dc2626; }
+.game-pdot--mustard.caught { background: #fbbf24; border-color: #d97706; }
+.game-pdot--mayo.caught    { background: #fef3c7; border-color: #d1b063; }
+.game-pdot--yogurt.caught    { background: #fefce8; border-color: #ca8a04; }
+.game-pdot--spicy.caught     { background: #f97316; border-color: #ea580c; }
+.game-pdot--gyrosmeat.caught { background: #9a5028; border-color: #7c3a1a; }
 
 .game-score {
   font-size: 0.88rem;
@@ -6099,6 +6575,60 @@ textarea:disabled {
   width: 100%;
   height: 36px;
   pointer-events: none;
+}
+
+/* ── Gyros catch game elements ──────────────────────────────────────────── */
+@keyframes topTortillaPulse {
+  0%, 100% { filter: drop-shadow(0 0 7px rgba(240,180,30,0.45)); }
+  50%       { filter: drop-shadow(0 0 16px rgba(240,180,30,0.90)); }
+}
+.catch-item--top-tortilla {
+  width: 110px;
+  animation: topTortillaPulse 0.85s ease-in-out infinite;
+}
+/* Make the tortilla cap inside the falling item fill the width */
+.game-top-tortilla-cap {
+  pointer-events: none;
+}
+
+@keyframes topTortillaLand {
+  from { opacity: 0; transform: translateY(-16px) scaleX(0.8); }
+  to   { opacity: 1; transform: translateY(0) scaleX(1); }
+}
+.game-tower-top-tortilla {
+  width: 100%;
+  pointer-events: none;
+  animation: topTortillaLand 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Gyros tower — same flex-column layout as burger tower */
+.game-gyros-tower {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+/* Bottom tortilla paddle surface */
+.game-tortilla-bottom {
+  width: 100%;
+  height: 14px;
+  position: relative;
+  border-radius: 50% / 40%;
+  background: linear-gradient(180deg, #f5d78e 0%, #d4a832 100%);
+  border: 1.5px solid #b07820;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.55), inset 0 -2px 4px rgba(255,255,255,0.15);
+}
+.game-tortilla-bottom::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 4%; right: 4%;
+  height: 8px;
+  border-radius: 50% / 40%;
+  background: linear-gradient(180deg, #f8e4a4 0%, #e8c048 100%);
+  border: 1.5px solid #c09030;
+  box-shadow: 0 -2px 5px rgba(0,0,0,0.25);
 }
 
 /* Paddle — flex-column so the burger tower stacks upward from the bun */
@@ -6244,4 +6774,103 @@ textarea:disabled {
   letter-spacing: -0.01em;
   color: #fff;
   text-shadow: 0 2px 12px rgba(0,0,0,0.5);
+}
+
+/* ── Loading screen ───────────────────────────────────────────────────────── */
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: var(--bg);
+  z-index: 9999;
+}
+
+.loading-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(18px, 5vw, 28px);
+  width: min(100%, 280px);
+}
+
+.loading-burger {
+  --lb-top-lift: clamp(32px, 12vw, 46px);
+  --lb-ing-1-lift: clamp(21px, 8vw, 30px);
+  --lb-ing-2-lift: clamp(13px, 5vw, 18px);
+  --lb-ing-3-lift: clamp(6px, 2.6vw, 9px);
+  --lb-ing-4-lift: clamp(2px, 1vw, 3px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: clamp(150px, 56vw, 210px);
+  max-width: 100%;
+  overflow: visible;
+}
+
+.loading-burger .burger-bun,
+.loading-burger .burger-layer {
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.loading-burger .burger-bun {
+  height: clamp(34px, 13vw, 54px);
+}
+
+.loading-burger .burger-bun--bottom {
+  height: clamp(24px, 9vw, 36px);
+}
+
+.loading-burger .burger-layer {
+  display: grid;
+  height: clamp(18px, 6vw, 28px);
+}
+
+.loading-burger .burger-layer-sprite,
+.loading-burger .burger-layer--patty .burger-layer-sprite {
+  height: 100%;
+}
+
+/* ── Float-apart keyframes ────────────────────────────────────────────────── */
+/* Each layer drifts upward by a different amount at 50%, then returns.      */
+/* The bottom bun is the anchor — it never moves.                            */
+@keyframes lb-bun-top { 0%,100% { transform: translateY(0) } 50% { transform: translateY(calc(-1 * var(--lb-top-lift))) } }
+@keyframes lb-ing-1   { 0%,100% { transform: translateY(0) } 50% { transform: translateY(calc(-1 * var(--lb-ing-1-lift))) } }
+@keyframes lb-ing-2   { 0%,100% { transform: translateY(0) } 50% { transform: translateY(calc(-1 * var(--lb-ing-2-lift))) } }
+@keyframes lb-ing-3   { 0%,100% { transform: translateY(0) } 50% { transform: translateY(calc(-1 * var(--lb-ing-3-lift)))  } }
+@keyframes lb-ing-4   { 0%,100% { transform: translateY(0) } 50% { transform: translateY(calc(-1 * var(--lb-ing-4-lift)))  } }
+
+@keyframes lb-pulse {
+  0%, 100% { opacity: 0.45; }
+  50%       { opacity: 1;    }
+}
+
+/* Animation timing: all share the same duration so they float and return in sync */
+.lb-bun-top { animation: lb-bun-top 2.4s ease-in-out infinite; }
+.lb-ing-1   { animation: lb-ing-1   2.4s ease-in-out infinite; }
+.lb-ing-2   { animation: lb-ing-2   2.4s ease-in-out infinite; }
+.lb-ing-3   { animation: lb-ing-3   2.4s ease-in-out infinite; }
+.lb-ing-4   { animation: lb-ing-4   2.4s ease-in-out infinite; }
+
+.loading-label {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--muted);
+  animation: lb-pulse 2.4s ease-in-out infinite;
+}
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .lb-bun-top, .lb-ing-1, .lb-ing-2, .lb-ing-3, .lb-ing-4, .loading-label {
+    animation: none;
+    opacity: 1;
+  }
 }

@@ -4,7 +4,7 @@ import { getStaffSessionId } from '../../lib/session'
 import { useAuth } from '../auth/useAuth'
 import { subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
 import { PERSON_RECORD_STATUSES, subscribeToPeople } from '../people/personService'
-import { normalizeQrInput } from '../qr/qrLinks'
+import { QR_CODE_LENGTH, normalizeQrInput } from '../qr/qrLinks'
 import { useQrScanner } from '../qr/useQrScanner'
 import { usePosSession } from './usePosSession'
 import { PRODUCT_CATEGORIES, subscribeToProducts } from '../products/productService'
@@ -44,6 +44,8 @@ const allCategories = ['all', ...PRODUCT_CATEGORIES, MISC_CATEGORY]
 const BASKET_ABANDON_CANCEL_MS = 60 * 1000
 const BASKET_HEARTBEAT_MS = 15 * 1000
 const BASKET_SYNC_DEBOUNCE_MS = 220
+const KEYBOARD_SCANNER_MAX_GAP_MS = 350
+const KEYBOARD_SCANNER_FLUSH_MS = 500
 const EMPTY_BASKET_SUMMARY = Object.freeze({
   items: [],
   itemCount: 0,
@@ -58,6 +60,7 @@ const SPRITZER_GUIDE = Object.freeze([
   { name: 'Viceházmester', ratio: '2:3', wineDl: 2, sodaDl: 3 },
 ])
 const BURGER_TRIGGER_PATTERN = /\b(?:ham)?burger\b/i
+const GYROS_TRIGGER_PATTERN  = /\bgyros\b/i
 const BURGER_SPRITE_KEYWORDS = Object.freeze([
   { kind: 'patty', keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
   { kind: 'cheese', keywords: ['sajt', 'cheese', 'cheddar'] },
@@ -65,10 +68,14 @@ const BURGER_SPRITE_KEYWORDS = Object.freeze([
   { kind: 'tomato', keywords: ['paradicsom', 'tomato'] },
   { kind: 'onion', keywords: ['hagyma', 'onion'] },
   { kind: 'bacon', keywords: ['bacon', 'szalonna'] },
-  { kind: 'sauce', keywords: ['szosz', 'szósz', 'sauce', 'ketchup', 'majonez', 'majonéz', 'mustar', 'mustár'] },
+  { kind: 'ketchup', keywords: ['szosz', 'szósz', 'sauce', 'ketchup'] },
+  { kind: 'mustard', keywords: ['mustar', 'mustár', 'mustard'] },
+  { kind: 'mayo',    keywords: ['majonez', 'majonéz', 'mayo', 'majonaise'] },
 ])
 const BURGER_LAYER_ORDER = Object.freeze({
-  sauce: 5,
+  ketchup: 5,
+  mustard: 5,
+  mayo: 5,
   tomato: 10,
   lettuce: 20,
   onion: 25,
@@ -77,6 +84,25 @@ const BURGER_LAYER_ORDER = Object.freeze({
   'patty:extra': 40,
   cheese: 50,
   patty: 60,
+})
+
+const GYROS_SPRITE_KEYWORDS = Object.freeze([
+  { kind: 'gyrosmeat', keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
+  { kind: 'yogurt',    keywords: ['joghurt', 'joghurtos'] },
+  { kind: 'spicy',     keywords: ['csipos', 'csípős', 'csipős', 'spicy', 'eros', 'erős'] },
+  { kind: 'onion',     keywords: ['hagyma', 'onion'] },
+  { kind: 'lettuce',   keywords: ['salata', 'saláta', 'lettuce'] },
+  { kind: 'tomato',    keywords: ['paradicsom', 'tomato'] },
+])
+
+const GYROS_LAYER_ORDER = Object.freeze({
+  spicy: 3,
+  yogurt: 5,
+  tomato: 10,
+  lettuce: 15,
+  onion: 20,
+  'gyrosmeat:extra': 25,
+  gyrosmeat: 30,
 })
 
 function CameraIcon() {
@@ -148,6 +174,10 @@ function isBurgerVisualTemplate(product, template) {
   return BURGER_TRIGGER_PATTERN.test(`${product?.name || ''} ${template?.name || ''}`)
 }
 
+function isGyrosVisualTemplate(product, template) {
+  return GYROS_TRIGGER_PATTERN.test(`${product?.name || ''} ${template?.name || ''}`)
+}
+
 function getBurgerSpriteKind(label) {
   const normalizedLabel = normalizeIngredientLabel(label)
   const match = BURGER_SPRITE_KEYWORDS.find((entry) =>
@@ -160,6 +190,56 @@ function getBurgerSpriteKind(label) {
 function getBurgerLayerOrder(layer) {
   const sourceKey = layer.source === 'extra' ? `${layer.spriteKind}:extra` : layer.spriteKind
   return BURGER_LAYER_ORDER[sourceKey] ?? BURGER_LAYER_ORDER[layer.spriteKind] ?? 90
+}
+
+function getGyrosSpriteKind(label) {
+  const normalizedLabel = normalizeIngredientLabel(label)
+  const match = GYROS_SPRITE_KEYWORDS.find((entry) =>
+    entry.keywords.some((keyword) => normalizedLabel.includes(normalizeIngredientLabel(keyword))),
+  )
+  return match?.kind || null
+}
+
+function getGyrosLayerOrder(layer) {
+  const sourceKey = layer.source === 'extra' ? `${layer.spriteKind}:extra` : layer.spriteKind
+  return GYROS_LAYER_ORDER[sourceKey] ?? GYROS_LAYER_ORDER[layer.spriteKind] ?? 90
+}
+
+function getGyrosLayerState(template, customizationState) {
+  const knownIngredients = []
+  const unknownIngredients = []
+  const visualExtras = []
+
+  ;(template.defaultIncludedIngredients || []).forEach((ingredient) => {
+    const spriteKind = getGyrosSpriteKind(ingredient.label)
+    const entry = {
+      ...ingredient,
+      spriteKind,
+      source: 'default',
+      included: customizationState?.includedIngredientIds.has(ingredient.id) || false,
+    }
+    if (spriteKind) knownIngredients.push(entry)
+    else unknownIngredients.push(entry)
+  })
+
+  ;(customizationState?.extras || []).forEach((extra) => {
+    if (extra.quantity <= 0) return
+    const spriteKind = getGyrosSpriteKind(extra.label)
+    if (!spriteKind) return
+    for (let index = 0; index < extra.quantity; index += 1) {
+      visualExtras.push({
+        ...extra,
+        id: `${extra.id}-${index}`,
+        originalId: extra.id,
+        quantity: 1,
+        spriteKind,
+        source: 'extra',
+        included: true,
+      })
+    }
+  })
+
+  return { knownIngredients, unknownIngredients, visualExtras }
 }
 
 function getBurgerLayerState(template, customizationState) {
@@ -339,6 +419,54 @@ function BurgerCustomizer({ template, customizationState, onToggleIngredient, on
   )
 }
 
+function GyrosCustomizer({ template, customizationState, onToggleIngredient, onRemoveExtraLayer, extrasContent }) {
+  const { knownIngredients, unknownIngredients, visualExtras } = getGyrosLayerState(template, customizationState)
+  const visibleLayers = [...knownIngredients, ...visualExtras]
+    .sort((left, right) => getGyrosLayerOrder(left) - getGyrosLayerOrder(right))
+
+  return (
+    <div className="burger-customizer">
+      <div className="gyros-stage" aria-label="Gyros összetevők">
+        <div className="gyros-wrap gyros-wrap--top" aria-hidden="true" />
+
+        <div className="burger-stack">
+          {visibleLayers.length ? (
+            visibleLayers.map((layer) => (
+              <BurgerLayer
+                key={`${layer.id}-${layer.quantity || 0}`}
+                layer={layer}
+                onToggle={
+                  layer.source === 'extra'
+                    ? () => onRemoveExtraLayer(layer.originalId)
+                    : () => onToggleIngredient(layer.id)
+                }
+              />
+            ))
+          ) : (
+            <div className="burger-empty-layer">Nincs vizuális összetevő</div>
+          )}
+        </div>
+
+        <div className="gyros-wrap gyros-wrap--bottom" aria-hidden="true" />
+      </div>
+
+      <div className="burger-chip-panel">
+        <span className="burger-chip-panel-title">Összetevők</span>
+        <div className="burger-chip-row">
+          {[...knownIngredients, ...unknownIngredients].map((ingredient) => (
+            <IngredientToggleChip
+              key={ingredient.id}
+              ingredient={ingredient}
+              onToggle={() => onToggleIngredient(ingredient.id)}
+            />
+          ))}
+        </div>
+        {extrasContent}
+      </div>
+    </div>
+  )
+}
+
 function createCustomizationState(template) {
   return {
     includedIngredientIds: new Set((template.defaultIncludedIngredients || []).map((item) => item.id)),
@@ -422,6 +550,7 @@ export function StaffPosPanel({ eventId }) {
   const [customizationState, setCustomizationState] = useState(null)
   const [funModeActive, setFunModeActive] = useState(false)
   const [burgerGameProduct, setBurgerGameProduct] = useState(null)
+  const [gyrosGameProduct, setGyrosGameProduct] = useState(null)
   const funLongPressRef = useRef(null)
   const [spritzerGuideOpen, setSpritzerGuideOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
@@ -441,6 +570,11 @@ export function StaffPosPanel({ eventId }) {
   const latestBasketItemsRef = useRef([])
   const committedBasketItemsRef = useRef([])
   const activeBasketSaveRef = useRef(null)
+  const typedQrAutoSelectRef = useRef('')
+  const keyboardScannerBufferRef = useRef('')
+  const keyboardScannerLastKeyAtRef = useRef(0)
+  const keyboardScannerFlushTimerRef = useRef(null)
+  const hiddenScannerInputRef = useRef(null)
   const selectedPersonRef = useRef(null)
   const flushBasketDraftRef = useRef(async () => {})
   const activeBasketSnapshotRef = useRef({
@@ -567,12 +701,19 @@ export function StaffPosPanel({ eventId }) {
   const shouldShowSearchResults = searchQuery.trim().length >= 2
   const displayedBasketSummary = isSwitchingPerson ? EMPTY_BASKET_SUMMARY : basketSummary
   const blockingBasketAction = selectionPending || finalizePending || cancelPending
+  const blockingTypedQrAutoSelect = finalizePending || cancelPending
   const productsDisabled = !selectedPerson || blockingBasketAction
   const customizationIsBurgerVisual = Boolean(
     customizingProduct
     && customizationState
     && isBurgerVisualTemplate(customizingProduct.product, customizingProduct.template),
   )
+  const customizationIsGyrosVisual = Boolean(
+    customizingProduct
+    && customizationState
+    && isGyrosVisualTemplate(customizingProduct.product, customizingProduct.template),
+  )
+  const customizationIsWideVisual = customizationIsBurgerVisual || customizationIsGyrosVisual
 
   selectedPersonRef.current = selectedPerson
   activeBasketSnapshotRef.current = {
@@ -582,7 +723,7 @@ export function StaffPosPanel({ eventId }) {
     isSyncing: basketSyncing,
   }
 
-  async function resolvePersonFromQr(rawValue) {
+  const resolvePersonFromQr = useCallback(async (rawValue) => {
     let normalizedQr = ''
 
     try {
@@ -597,7 +738,24 @@ export function StaffPosPanel({ eventId }) {
     }
 
     return findPersonByQr(eventId, normalizedQr)
-  }
+  }, [eventId, peopleByQrCode])
+
+  const focusHiddenScannerInput = useCallback((force = false) => {
+    if (cameraOpen || customizingProduct) {
+      return
+    }
+
+    const activeElement = document.activeElement
+    const hiddenInput = hiddenScannerInputRef.current
+    const tagName = activeElement?.tagName?.toLowerCase()
+    const activeElementIsTextEntry = tagName === 'input' || tagName === 'textarea' || tagName === 'select' || activeElement?.isContentEditable
+
+    if (!hiddenInput || activeElement === hiddenInput || (!force && activeElementIsTextEntry)) {
+      return
+    }
+
+    hiddenInput.focus({ preventScroll: true })
+  }, [cameraOpen, customizingProduct])
 
   const { videoRef, scannerSupported } = useQrScanner({
     active: cameraOpen,
@@ -626,6 +784,176 @@ export function StaffPosPanel({ eventId }) {
       setErrorMessage(error.message || 'A kamerás QR-beolvasás nem érhető el ezen az eszközön.')
     },
   })
+
+  const tryAutoSelectQr = useCallback((rawValue) => {
+    const trimmedValue = String(rawValue || '').trim()
+
+    if (!trimmedValue || blockingTypedQrAutoSelect) {
+      return false
+    }
+
+    let normalizedQr = ''
+
+    try {
+      normalizedQr = normalizeQrInput(trimmedValue)
+    } catch {
+      return false
+    }
+
+    if (typedQrAutoSelectRef.current === normalizedQr) {
+      return true
+    }
+
+    typedQrAutoSelectRef.current = normalizedQr
+    setSelectionPending(true)
+    setErrorMessage('')
+
+    ;(async () => {
+      try {
+        const person = await resolvePersonFromQr(normalizedQr)
+        await performSwitchToPersonRef.current(person)
+        setSearchQuery('')
+      } catch (error) {
+        typedQrAutoSelectRef.current = ''
+        setErrorMessage(error.message)
+      } finally {
+        typedQrAutoSelectRef.current = ''
+        setSelectionPending(false)
+        window.setTimeout(() => focusHiddenScannerInput(true), 0)
+      }
+    })()
+
+    return true
+  }, [blockingTypedQrAutoSelect, focusHiddenScannerInput, resolvePersonFromQr])
+
+  useEffect(() => {
+    tryAutoSelectQr(searchQuery)
+  }, [searchQuery, tryAutoSelectQr])
+
+  useEffect(() => {
+    function clearKeyboardScannerFlushTimer() {
+      if (keyboardScannerFlushTimerRef.current) {
+        window.clearTimeout(keyboardScannerFlushTimerRef.current)
+        keyboardScannerFlushTimerRef.current = null
+      }
+    }
+
+    function flushKeyboardScannerBuffer() {
+      clearKeyboardScannerFlushTimer()
+      const bufferedValue = keyboardScannerBufferRef.current
+      keyboardScannerBufferRef.current = ''
+
+      if (bufferedValue.length >= QR_CODE_LENGTH) {
+        tryAutoSelectQr(bufferedValue)
+      }
+    }
+
+    function isTextEntryElement(element) {
+      const tagName = element?.tagName?.toLowerCase()
+      return tagName === 'input' || tagName === 'textarea' || tagName === 'select' || element?.isContentEditable
+    }
+
+    function handleGlobalKeyDown(event) {
+      if (event.ctrlKey || event.altKey || event.metaKey || cameraOpen || customizingProduct) {
+        return
+      }
+
+      if (isTextEntryElement(document.activeElement)) {
+        return
+      }
+
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        if (keyboardScannerBufferRef.current) {
+          event.preventDefault()
+          flushKeyboardScannerBuffer()
+        } else {
+          keyboardScannerLastKeyAtRef.current = 0
+        }
+        return
+      }
+
+      if (event.key.length !== 1) {
+        return
+      }
+
+      const now = Date.now()
+      if (now - keyboardScannerLastKeyAtRef.current > KEYBOARD_SCANNER_MAX_GAP_MS) {
+        keyboardScannerBufferRef.current = ''
+      }
+
+      keyboardScannerLastKeyAtRef.current = now
+      keyboardScannerBufferRef.current += event.key
+
+      if (keyboardScannerBufferRef.current.length >= 2) {
+        event.preventDefault()
+      }
+
+      clearKeyboardScannerFlushTimer()
+      keyboardScannerFlushTimerRef.current = window.setTimeout(
+        flushKeyboardScannerBuffer,
+        KEYBOARD_SCANNER_FLUSH_MS,
+      )
+    }
+
+    function handleGlobalPaste(event) {
+      if (cameraOpen || customizingProduct || isTextEntryElement(document.activeElement)) {
+        return
+      }
+
+      const pastedValue = event.clipboardData?.getData('text') || ''
+      if (pastedValue && tryAutoSelectQr(pastedValue)) {
+        event.preventDefault()
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true)
+    window.addEventListener('paste', handleGlobalPaste, true)
+    return () => {
+      clearKeyboardScannerFlushTimer()
+      window.removeEventListener('keydown', handleGlobalKeyDown, true)
+      window.removeEventListener('paste', handleGlobalPaste, true)
+    }
+  }, [cameraOpen, customizingProduct, tryAutoSelectQr])
+
+  useEffect(() => {
+    const focusTimer = window.setTimeout(focusHiddenScannerInput, 0)
+    const scheduleScannerFocus = () => window.setTimeout(focusHiddenScannerInput, 0)
+
+    window.addEventListener('pointerup', scheduleScannerFocus)
+    window.addEventListener('focus', scheduleScannerFocus)
+
+    return () => {
+      window.clearTimeout(focusTimer)
+      window.removeEventListener('pointerup', scheduleScannerFocus)
+      window.removeEventListener('focus', scheduleScannerFocus)
+    }
+  }, [focusHiddenScannerInput, selectionPending, selectedPerson])
+
+  function handleHiddenScannerInputBlur() {
+    window.setTimeout(focusHiddenScannerInput, 0)
+  }
+
+  function handleHiddenScannerInputChange(event) {
+    const nextValue = event.target.value
+
+    if (tryAutoSelectQr(nextValue)) {
+      event.target.value = ''
+    } else if (nextValue.length > 512) {
+      event.target.value = nextValue.slice(-512)
+    }
+  }
+
+  function handleHiddenScannerInputKeyDown(event) {
+    if (event.key !== 'Enter' && event.key !== 'Tab') {
+      return
+    }
+
+    const input = event.currentTarget
+    if (input.value && tryAutoSelectQr(input.value)) {
+      event.preventDefault()
+      input.value = ''
+    }
+  }
 
   const clearBasketSyncTimer = useCallback(() => {
     if (basketSyncTimerRef.current) {
@@ -933,9 +1261,14 @@ export function StaffPosPanel({ eventId }) {
   const startCustomization = useCallback((product) => {
     const template = modifierTemplates.find((entry) => entry.id === product.modifierTemplateId)
 
-    // Fun mode: burger products launch the catch game instead of the modal
+    // Fun mode: burger/gyros products launch the catch game instead of the modal
     if (funModeActive && template && isBurgerVisualTemplate(product, template)) {
       setBurgerGameProduct({ product, template })
+      return
+    }
+
+    if (funModeActive && template && isGyrosVisualTemplate(product, template)) {
+      setGyrosGameProduct({ product, template })
       return
     }
 
@@ -1195,6 +1528,18 @@ export function StaffPosPanel({ eventId }) {
 
   return (
     <div className={`pos-screen-layout${funModeActive ? ' fun-mode' : ''}`}>
+      <input
+        ref={hiddenScannerInputRef}
+        className="pos-hidden-scanner-input"
+        type="text"
+        autoComplete="off"
+        inputMode="none"
+        aria-hidden="true"
+        tabIndex={-1}
+        onBlur={handleHiddenScannerInputBlur}
+        onChange={handleHiddenScannerInputChange}
+        onKeyDown={handleHiddenScannerInputKeyDown}
+      />
       {/* LEFT COLUMN: Lookup + Basket */}
       <div className="pos-basket-area">
         <div className="pos-toolbar-area">
@@ -1527,7 +1872,7 @@ export function StaffPosPanel({ eventId }) {
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                width: customizationIsBurgerVisual ? 'min(860px, calc(100vw - 40px))' : 'min(680px, calc(100vw - 40px))',
+                width: customizationIsWideVisual ? 'min(860px, calc(100vw - 40px))' : 'min(680px, calc(100vw - 40px))',
                 maxHeight: 'calc(100vh - 80px)',
                 zIndex: 1000,
                 background: 'white',
@@ -1554,9 +1899,23 @@ export function StaffPosPanel({ eventId }) {
               </div>
 
               {/* Modal body */}
-              <div className={`customization-modal-body${customizationIsBurgerVisual ? ' is-burger' : ''}`} style={{ flex: 1, padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
-                <div className={`dashboard-grid${customizationIsBurgerVisual ? ' customization-grid--burger' : ''}`} style={{ flex: 1, minHeight: 0 }}>
-                  {customizationIsBurgerVisual ? (
+              <div className={`customization-modal-body${customizationIsWideVisual ? ' is-burger' : ''}`} style={{ flex: 1, padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
+                <div className={`dashboard-grid${customizationIsWideVisual ? ' customization-grid--burger' : ''}`} style={{ flex: 1, minHeight: 0 }}>
+                  {customizationIsGyrosVisual ? (
+                    <GyrosCustomizer
+                      template={customizingProduct.template}
+                      customizationState={customizationState}
+                      onToggleIngredient={toggleCustomizationIngredient}
+                      onRemoveExtraLayer={(extraId) => adjustCustomizationExtraQuantity(extraId, -1)}
+                      extrasContent={(
+                        <CustomizationExtras
+                          extras={customizationState?.extras}
+                          onAdjustQuantity={adjustCustomizationExtraQuantity}
+                          onUpdateQuantity={updateCustomizationExtraQuantity}
+                        />
+                      )}
+                    />
+                  ) : customizationIsBurgerVisual ? (
                     <BurgerCustomizer
                       template={customizingProduct.template}
                       customizationState={customizationState}
@@ -1661,6 +2020,20 @@ export function StaffPosPanel({ eventId }) {
             addItemToBasket(product, customization)
           }}
           onCancel={() => setBurgerGameProduct(null)}
+        />
+      ) : null}
+
+      {gyrosGameProduct ? (
+        <BurgerCatchGame
+          variant="gyros"
+          product={gyrosGameProduct.product}
+          template={gyrosGameProduct.template}
+          onComplete={(customization) => {
+            const { product } = gyrosGameProduct
+            setGyrosGameProduct(null)
+            addItemToBasket(product, customization)
+          }}
+          onCancel={() => setGyrosGameProduct(null)}
         />
       ) : null}
     </div>

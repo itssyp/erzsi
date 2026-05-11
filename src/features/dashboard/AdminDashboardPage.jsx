@@ -2,11 +2,25 @@ import { AccountManagementPanel } from '../admin/AccountManagementPanel'
 import { AuditLogPanel } from '../admin/AuditLogPanel'
 import { EventManagementPanel } from '../admin/EventManagementPanel'
 import { PeopleManagementPanel } from '../admin/PeopleManagementPanel'
+import { RegisteredUsersPanel } from '../admin/RegisteredUsersPanel'
 import { DrsSummaryPanel } from '../drs/DrsSummaryPanel'
 import { StatusCard } from '../../components/StatusCard'
 import { useAuth } from '../auth/useAuth'
 import { useActiveEvent } from '../events/useActiveEvent'
 import { TabShell } from '../../components/TabShell'
+
+function getStatusLabel(status) {
+  switch (status) {
+    case 'active':
+      return 'aktív'
+    case 'draft':
+      return 'vázlat'
+    case 'closed':
+      return 'lezárva'
+    default:
+      return status || '-'
+  }
+}
 
 function OverviewTab({ activeEvent, activeEventId, account, user, runtime }) {
   return (
@@ -14,52 +28,52 @@ function OverviewTab({ activeEvent, activeEventId, account, user, runtime }) {
       <section className="panel admin-overview-event">
         <div className="admin-overview-event-header">
           <div>
-            <span className="eyebrow">Active event</span>
+            <span className="eyebrow">Aktív esemény</span>
             <h3>{activeEvent?.name || '—'}</h3>
           </div>
           {activeEvent ? (
-            <span className="event-pill status-active">active</span>
+            <span className="event-pill status-active">aktív</span>
           ) : (
-            <span className="event-pill">none</span>
+            <span className="event-pill">nincs</span>
           )}
         </div>
         <ul className="detail-list">
-          <li><strong>Code</strong><span style={{ fontFamily: 'monospace', fontSize: '0.82rem' }}>{activeEvent?.code || '-'}</span></li>
+          <li><strong>Kód</strong><span style={{ fontFamily: 'monospace', fontSize: '0.82rem' }}>{activeEvent?.code || '-'}</span></li>
           <li><strong>ID</strong><span style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>{activeEventId || '-'}</span></li>
-          <li><strong>Status</strong><span style={{ textTransform: 'capitalize' }}>{activeEvent?.status || '-'}</span></li>
-          <li><strong>Starts</strong><span>{activeEvent?.startsOn || '-'}</span></li>
+          <li><strong>Állapot</strong><span style={{ textTransform: 'capitalize' }}>{getStatusLabel(activeEvent?.status)}</span></li>
+          <li><strong>Kezdés</strong><span>{activeEvent?.startsOn || '-'}</span></li>
         </ul>
         {!activeEvent ? (
           <p className="helper-text" style={{ marginTop: '8px' }}>
-            Go to <strong>Események</strong> to create or activate an event.
+            Az <strong>Események</strong> fülön hozhatsz létre vagy aktiválhatsz eseményt.
           </p>
         ) : null}
       </section>
 
       <section className="panel">
-        <span className="eyebrow">Admin account</span>
+        <span className="eyebrow">Admin fiók</span>
         <h3 style={{ marginTop: '2px', marginBottom: '12px', fontSize: '1.1rem' }}>
           {account?.displayName || user?.displayName || '—'}
         </h3>
         <ul className="detail-list">
           <li><strong>E-mail</strong><span style={{ fontSize: '0.82rem' }}>{account?.email || user?.email || '-'}</span></li>
-          <li><strong>Role</strong><span>Admin</span></li>
+          <li><strong>Szerepkör</strong><span>Admin</span></li>
         </ul>
       </section>
 
       <section className="panel">
-        <span className="eyebrow">Runtime</span>
-        <h3 style={{ marginTop: '2px', marginBottom: '12px', fontSize: '1.1rem' }}>System state</h3>
+        <span className="eyebrow">Futási állapot</span>
+        <h3 style={{ marginTop: '2px', marginBottom: '12px', fontSize: '1.1rem' }}>Rendszerállapot</h3>
         <ul className="detail-list">
           <li>
-            <strong>Runtime doc</strong>
+            <strong>Runtime dokumentum</strong>
             <span style={{ fontFamily: 'monospace', fontSize: '0.76rem', wordBreak: 'break-all' }}>
-              {runtime ? (activeEventId ? `→ ${activeEventId}` : 'present, no active event') : 'missing or empty'}
+              {runtime ? (activeEventId ? `→ ${activeEventId}` : 'létezik, nincs aktív esemény') : 'hiányzik vagy üres'}
             </span>
           </li>
           <li>
-            <strong>Staff views</strong>
-            <span>{activeEventId ? 'open' : 'locked — no active event'}</span>
+            <strong>Staff nézetek</strong>
+            <span>{activeEventId ? 'nyitva' : 'zárolva - nincs aktív esemény'}</span>
           </li>
         </ul>
       </section>
@@ -94,15 +108,29 @@ export function AdminDashboardPage() {
       id: 'people',
       label: 'Személyek',
       component: activeEventId ? (
-        <PeopleManagementPanel eventId={activeEventId} actorUid={user?.uid} />
+        <PeopleManagementPanel eventId={activeEventId} actorUid={user?.uid} view="personas" />
+      ) : (
+        <StatusCard title="Nincs aktív esemény" tone="warning" body="Először válassz vagy hozz létre egy eseményt az Események fülön." />
+      ),
+    },
+    {
+      id: 'qrpool',
+      label: 'QR Pool',
+      component: activeEventId ? (
+        <PeopleManagementPanel eventId={activeEventId} actorUid={user?.uid} view="qrpool" />
       ) : (
         <StatusCard title="Nincs aktív esemény" tone="warning" body="Először válassz vagy hozz létre egy eseményt az Események fülön." />
       ),
     },
     {
       id: 'accounts',
-      label: 'Fiókok',
+      label: 'Staff fiókok',
       component: <AccountManagementPanel actorUid={user?.uid} />,
+    },
+    {
+      id: 'registered-users',
+      label: 'Felhasználók',
+      component: <RegisteredUsersPanel />,
     },
     {
       id: 'drs',
@@ -129,14 +157,6 @@ export function AdminDashboardPage() {
 
   return (
     <>
-      <section className="page-heading">
-        <span className="eyebrow">Admin</span>
-        <h2>Tábori operációs központ</h2>
-        <p className="muted">
-          Az admin felületről kezelhető az aktív esemény életciklusa, az előkészítés, az archívum és az esemény utáni riportolás.
-        </p>
-      </section>
-
       {!hasActiveEvent ? (
         <StatusCard
           title="Még nincs aktív esemény"

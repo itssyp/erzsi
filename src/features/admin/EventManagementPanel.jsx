@@ -21,7 +21,7 @@ const initialFormState = {
   cloneProductsFromEventId: '',
 }
 
-function formatDate(value, fallback = 'No date') {
+function formatDate(value, fallback = 'Nincs dátum') {
   if (!value) return fallback
   if (value?.toDate) return value.toDate().toLocaleDateString('hu-HU')
   return value
@@ -33,13 +33,26 @@ function formatTimestamp(value, fallback = '-') {
 }
 
 function getEventStatus(event, activeEventId) {
-  if (!event) return 'No event selected'
+  if (!event) return 'Nincs kiválasztott esemény'
   if (activeEventId === event.id) return 'active'
   return event.status || 'draft'
 }
 
 function getStatusClass(status) {
   return `${status}`.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+}
+
+function getStatusLabel(status) {
+  switch (status) {
+    case 'active':
+      return 'aktív'
+    case 'draft':
+      return 'vázlat'
+    case 'closed':
+      return 'lezárva'
+    default:
+      return status
+  }
 }
 
 function getNormalizedShibboleth(person) {
@@ -87,14 +100,14 @@ function buildEventHealth(people) {
 function formatCloseError(error) {
   const details = error?.details
   if (!details?.missingShibboleth?.length && !details?.duplicateShibboleths?.length) {
-    return error?.message || 'Closing the event failed.'
+    return error?.message || 'Az esemény lezárása sikertelen.'
   }
 
   const missing = details.missingShibboleth?.length
-    ? `Missing shibboleth with non-zero balance: ${details.missingShibboleth.map((item) => item.displayName || item.personId).join(', ')}.`
+    ? `Hiányzó shibboleth nem nulla egyenleggel: ${details.missingShibboleth.map((item) => item.displayName || item.personId).join(', ')}.`
     : ''
   const duplicates = details.duplicateShibboleths?.length
-    ? `Duplicate shibboleth: ${details.duplicateShibboleths.map((item) => item.normalizedShibboleth).join(', ')}.`
+    ? `Duplikált shibboleth: ${details.duplicateShibboleths.map((item) => item.normalizedShibboleth).join(', ')}.`
     : ''
 
   return [error.message, missing, duplicates].filter(Boolean).join(' ')
@@ -117,26 +130,26 @@ function CloseEventDialog({ event, health, pending, onCancel, onConfirm }) {
       <section className="event-close-dialog floating-overlay" role="dialog" aria-modal="true" aria-labelledby="closeEventTitle">
         <div className="split-header">
           <div>
-            <h3 id="closeEventTitle">Close active event</h3>
+            <h3 id="closeEventTitle">Aktív esemény lezárása</h3>
             <p className="helper-text">
-              Balances will be saved by shibboleth and the runtime active event will be cleared.
+              Az egyenlegek shibboleth alapján mentésre kerülnek, az aktív esemény pedig törlődik a runtime állapotból.
             </p>
           </div>
-          <span className="event-pill">{event?.name || 'Active event'}</span>
+          <span className="event-pill">{event?.name || 'Aktív esemény'}</span>
         </div>
 
         <div className="event-metric-grid compact">
-          <MetricTile label="Personas checked" value={String(health.activePeople.length)} />
-          <MetricTile label="Carry-over docs" value={String(health.carryableCount)} />
-          <MetricTile label="Total balance" value={formatHuf(health.totalBalance)} />
-          <MetricTile label="Blockers" value={String(blockers)} tone={blockers ? 'warning' : 'success'} />
+          <MetricTile label="Ellenőrzött personák" value={String(health.activePeople.length)} />
+          <MetricTile label="Áthozható rekordok" value={String(health.carryableCount)} />
+          <MetricTile label="Teljes egyenleg" value={formatHuf(health.totalBalance)} />
+          <MetricTile label="Blokkolók" value={String(blockers)} tone={blockers ? 'warning' : 'success'} />
         </div>
 
         {blockers ? (
           <div className="event-validation-list">
             {health.missingShibbolethWithBalance.length ? (
               <section>
-                <h4>Missing shibboleth with non-zero balance</h4>
+                <h4>Hiányzó shibboleth nem nulla egyenleggel</h4>
                 <ul>
                   {health.missingShibbolethWithBalance.map((person) => (
                     <li key={person.id}>
@@ -148,7 +161,7 @@ function CloseEventDialog({ event, health, pending, onCancel, onConfirm }) {
             ) : null}
             {health.duplicateShibboleths.length ? (
               <section>
-                <h4>Duplicate shibboleths</h4>
+                <h4>Duplikált shibboleth-ek</h4>
                 <ul>
                   {health.duplicateShibboleths.map((duplicate) => (
                     <li key={duplicate.normalizedShibboleth}>
@@ -161,18 +174,18 @@ function CloseEventDialog({ event, health, pending, onCancel, onConfirm }) {
           </div>
         ) : (
           <StatusCard
-            title="Ready to close"
+            title="Lezárható"
             tone="success"
-            body="No duplicate shibboleths or non-zero balances without shibboleth were found."
+            body="Nincs duplikált shibboleth, és nincs shibboleth nélküli nem nulla egyenleg."
           />
         )}
 
         <div className="button-row">
           <button type="button" className="secondary-button" onClick={onCancel} disabled={pending}>
-            Cancel
+            Mégse
           </button>
           <button type="button" className="danger-button" onClick={onConfirm} disabled={pending || Boolean(blockers)}>
-            {pending ? 'Closing...' : 'Close event and carry balances'}
+            {pending ? 'Lezárás...' : 'Esemény lezárása és egyenlegek áthozása'}
           </button>
         </div>
       </section>
@@ -263,7 +276,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
       setSelectedEventId(nextEventId)
       setFormState(initialFormState)
       setShowCreateForm(false)
-      setStatusMessage('Event created.')
+      setStatusMessage('Esemény létrehozva.')
     } catch (error) {
       setErrorMessage(error.message)
     } finally {
@@ -279,7 +292,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
     try {
       await activateEvent({ eventId, actorUid, currentActiveEventId: activeEventId })
       setSelectedEventId(eventId)
-      setStatusMessage('Event activated.')
+      setStatusMessage('Esemény aktiválva.')
     } catch (error) {
       setErrorMessage(error.message)
     } finally {
@@ -297,7 +310,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
     try {
       const result = await closeEventAndCarryBalances({ eventId: selectedEventId })
       setCloseDialogOpen(false)
-      setStatusMessage(`Event closed. Saved ${result.carriedCount} carry-over balances totaling ${formatHuf(result.totalBalance || 0)}.`)
+      setStatusMessage(`Esemény lezárva. ${result.carriedCount} áthozott egyenleg mentve, összesen ${formatHuf(result.totalBalance || 0)}.`)
     } catch (error) {
       setErrorMessage(formatCloseError(error))
     } finally {
@@ -327,14 +340,14 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
         <aside className="event-list-pane">
           <div className="event-list-header">
             <span className="helper-text">
-              {loadingEvents ? 'Loading…' : `${events.length} event${events.length !== 1 ? 's' : ''}`}
+              {loadingEvents ? 'Betöltés...' : `${events.length} esemény`}
             </span>
             <button
               type="button"
               className={`secondary-button btn-sm${showCreateForm ? ' active-outline' : ''}`}
               onClick={showCreateForm ? () => setShowCreateForm(false) : openCreateForm}
             >
-              {showCreateForm ? 'Cancel' : '+ New event'}
+              {showCreateForm ? 'Mégse' : '+ Új esemény'}
             </button>
           </div>
 
@@ -353,12 +366,12 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                     <strong>{event.name}</strong>
                     <small>{[event.code, formatDate(event.startsOn, null)].filter(Boolean).join(' · ')}</small>
                   </span>
-                  <span className={`event-pill status-${getStatusClass(status)}`}>{status}</span>
+                  <span className={`event-pill status-${getStatusClass(status)}`}>{getStatusLabel(status)}</span>
                 </button>
               )
             })}
             {!loadingEvents && events.length === 0 ? (
-              <p className="helper-text">No events yet. Create the first one.</p>
+              <p className="helper-text">Még nincs esemény. Hozd létre az elsőt.</p>
             ) : null}
           </div>
         </aside>
@@ -368,24 +381,24 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
 
           {showCreateForm ? (
             <section className="panel">
-              <h3 className="card-title">Create event</h3>
+              <h3 className="card-title">Esemény létrehozása</h3>
               <p className="helper-text" style={{ marginBottom: '12px' }}>
-                New events start empty unless you clone a catalog. If another event is active, close it before activating the new one.
+                Az új események üres katalógussal indulnak, hacsak nem klónozol katalógust. Ha van aktív esemény, előbb zárd le az új aktiválása előtt.
               </p>
               <form className="form-grid" onSubmit={handleCreateEvent}>
                 <div className="field">
-                  <label htmlFor="eventName">Event name</label>
+                  <label htmlFor="eventName">Esemény neve</label>
                   <input
                     id="eventName"
                     name="name"
                     value={formState.name}
                     onChange={updateField}
-                    placeholder="Camp 2026"
+                    placeholder="Tábor 2026"
                     required
                   />
                 </div>
                 <div className="field">
-                  <label htmlFor="eventCode">Code</label>
+                  <label htmlFor="eventCode">Kód</label>
                   <input
                     id="eventCode"
                     name="code"
@@ -395,7 +408,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                   />
                 </div>
                 <div className="field">
-                  <label htmlFor="startsOn">Start date</label>
+                  <label htmlFor="startsOn">Kezdés dátuma</label>
                   <input
                     id="startsOn"
                     name="startsOn"
@@ -405,14 +418,14 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                   />
                 </div>
                 <div className="field">
-                  <label htmlFor="cloneProductsFromEventId">Clone catalog from event</label>
+                  <label htmlFor="cloneProductsFromEventId">Katalógus klónozása eseményből</label>
                   <select
                     id="cloneProductsFromEventId"
                     name="cloneProductsFromEventId"
                     value={formState.cloneProductsFromEventId}
                     onChange={updateField}
                   >
-                    <option value="">Start with an empty catalog</option>
+                    <option value="">Indítás üres katalógussal</option>
                     {events.map((event) => (
                       <option key={event.id} value={event.id}>
                         {event.name} ({event.code})
@@ -427,14 +440,14 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                     checked={formState.activateNow}
                     onChange={updateField}
                   />
-                  <span>Create and activate immediately</span>
+                  <span>Létrehozás és azonnali aktiválás</span>
                 </label>
                 <div className="button-row">
                   <button type="button" className="secondary-button" onClick={() => setShowCreateForm(false)}>
-                    Cancel
+                    Mégse
                   </button>
                   <button type="submit" className="primary-button" disabled={submitting}>
-                    {submitting ? 'Saving…' : 'Create event'}
+                    {submitting ? 'Mentés...' : 'Esemény létrehozása'}
                   </button>
                 </div>
               </form>
@@ -446,48 +459,48 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
               <section className="panel event-status-panel">
                 <div className="event-status-main">
                   <div>
-                    <span className="eyebrow">Event workspace</span>
+                    <span className="eyebrow">Esemény munkaterület</span>
                     <h3>{selectedEvent.name}</h3>
                     <p className="helper-text">
                       {[selectedEvent.code, formatDate(selectedEvent.startsOn, null)].filter(Boolean).join(' · ')}
                     </p>
                   </div>
                   <div className="pill-row">
-                    <span className={`event-pill status-${getStatusClass(selectedEventStatus)}`}>{selectedEventStatus}</span>
+                    <span className={`event-pill status-${getStatusClass(selectedEventStatus)}`}>{getStatusLabel(selectedEventStatus)}</span>
                   </div>
                 </div>
 
                 <div className="event-metric-grid">
-                  <MetricTile label="Personas" value={selectedEventLoading ? '…' : String(health.activePeople.length)} />
-                  <MetricTile label="Event balance" value={selectedEventLoading ? '…' : formatHuf(health.totalBalance)} />
+                  <MetricTile label="Personák" value={selectedEventLoading ? '...' : String(health.activePeople.length)} />
+                  <MetricTile label="Esemény egyenlege" value={selectedEventLoading ? '...' : formatHuf(health.totalBalance)} />
                   <MetricTile
-                    label="Missing shibboleths"
-                    value={selectedEventLoading ? '…' : String(health.missingShibboleth.length)}
+                    label="Hiányzó shibboleth"
+                    value={selectedEventLoading ? '...' : String(health.missingShibboleth.length)}
                     tone={health.missingShibboleth.length ? 'warning' : ''}
                   />
                   <MetricTile
-                    label="Duplicate shibboleths"
-                    value={selectedEventLoading ? '…' : String(health.duplicateShibboleths.length)}
+                    label="Duplikált shibboleth"
+                    value={selectedEventLoading ? '...' : String(health.duplicateShibboleths.length)}
                     tone={health.duplicateShibboleths.length ? 'warning' : ''}
                   />
                   <MetricTile
-                    label="Linked accounts"
-                    value={selectedEventLoading ? '…' : `${health.linkedCount}/${health.activePeople.length}`}
+                    label="Hozzárendelt fiókok"
+                    value={selectedEventLoading ? '...' : `${health.linkedCount}/${health.activePeople.length}`}
                   />
                 </div>
 
                 <ul className="detail-list">
-                  <li><strong>Activated</strong><span>{formatTimestamp(selectedEvent.activatedAt)}</span></li>
-                  <li><strong>Closed</strong><span>{formatTimestamp(selectedEvent.closedAt)}</span></li>
-                  <li><strong>Catalog</strong><span>{products.length} products, {modifierTemplates.length} modifier templates</span></li>
-                  <li><strong>Orders</strong><span>{orders.length}</span></li>
-                  <li><strong>Ledger entries</strong><span>{ledgerEntries.length}</span></li>
+                  <li><strong>Aktiválva</strong><span>{formatTimestamp(selectedEvent.activatedAt)}</span></li>
+                  <li><strong>Lezárva</strong><span>{formatTimestamp(selectedEvent.closedAt)}</span></li>
+                  <li><strong>Katalógus</strong><span>{products.length} termék, {modifierTemplates.length} módosítósablon</span></li>
+                  <li><strong>Rendelések</strong><span>{orders.length}</span></li>
+                  <li><strong>Ledger bejegyzések</strong><span>{ledgerEntries.length}</span></li>
                 </ul>
 
                 <div className="event-action-row">
                   {activeEventId && selectedEventId !== activeEventId ? (
                     <button type="button" className="secondary-button" onClick={() => selectEvent(activeEventId)}>
-                      View active event
+                      Aktív esemény megnyitása
                     </button>
                   ) : null}
                   {selectedEventId !== activeEventId ? (
@@ -495,10 +508,10 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                       type="button"
                       className="secondary-button"
                       disabled={Boolean(activeEventId) || submitting}
-                      title={activeEventId ? 'Close the active event first' : ''}
+                      title={activeEventId ? 'Előbb zárd le az aktív eseményt' : ''}
                       onClick={() => handleActivateEvent(selectedEventId)}
                     >
-                      {activeEventId ? 'Close active first' : 'Activate this event'}
+                      {activeEventId ? 'Előbb zárd le az aktívat' : 'Esemény aktiválása'}
                     </button>
                   ) : null}
                   {canCloseSelectedEvent ? (
@@ -508,7 +521,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                       onClick={() => setCloseDialogOpen(true)}
                       disabled={submitting || selectedEventLoading}
                     >
-                      Close active event
+                      Aktív esemény lezárása
                     </button>
                   ) : null}
                 </div>
@@ -516,21 +529,21 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
 
               {/* Carry-over readiness */}
               <section className="panel">
-                <h3 className="card-title">Carry-over readiness</h3>
+                <h3 className="card-title">Áthozási ellenőrzés</h3>
                 <p className="helper-text" style={{ marginBottom: '12px' }}>
-                  Closing writes each active persona balance into the global carry-over store by normalized shibboleth.
+                  Lezáráskor minden aktív persona egyenlege normalizált shibboleth alapján kerül az áthozási tárba.
                 </p>
                 <div className="event-metric-grid compact">
-                  <MetricTile label="Will carry" value={selectedEventLoading ? '…' : String(health.carryableCount)} />
-                  <MetricTile label="Total balance" value={selectedEventLoading ? '…' : formatHuf(health.totalBalance)} />
+                  <MetricTile label="Áthozható" value={selectedEventLoading ? '...' : String(health.carryableCount)} />
+                  <MetricTile label="Teljes egyenleg" value={selectedEventLoading ? '...' : formatHuf(health.totalBalance)} />
                   <MetricTile
-                    label="Missing with money"
-                    value={selectedEventLoading ? '…' : String(health.missingShibbolethWithBalance.length)}
+                    label="Hiányzó pénzzel"
+                    value={selectedEventLoading ? '...' : String(health.missingShibbolethWithBalance.length)}
                     tone={health.missingShibbolethWithBalance.length ? 'warning' : 'success'}
                   />
                   <MetricTile
-                    label="Duplicates"
-                    value={selectedEventLoading ? '…' : String(health.duplicateShibboleths.length)}
+                    label="Duplikációk"
+                    value={selectedEventLoading ? '...' : String(health.duplicateShibboleths.length)}
                     tone={health.duplicateShibboleths.length ? 'warning' : 'success'}
                   />
                 </div>
@@ -540,7 +553,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                     <div className="event-validation-list" style={{ marginTop: '12px' }}>
                       {health.missingShibbolethWithBalance.length ? (
                         <section>
-                          <h4>Missing shibboleth with non-zero balance</h4>
+                          <h4>Hiányzó shibboleth nem nulla egyenleggel</h4>
                           <ul>
                             {health.missingShibbolethWithBalance.map((person) => (
                               <li key={person.id}>{person.displayName || person.id} ({formatHuf(person.balance || 0)})</li>
@@ -550,7 +563,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                       ) : null}
                       {health.duplicateShibboleths.length ? (
                         <section>
-                          <h4>Duplicate shibboleths</h4>
+                          <h4>Duplikált shibboleth-ek</h4>
                           <ul>
                             {health.duplicateShibboleths.map((duplicate) => (
                               <li key={duplicate.normalizedShibboleth}>
@@ -563,9 +576,9 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                     </div>
                   ) : (
                     <StatusCard
-                      title="No blockers"
+                      title="Nincs blokkoló"
                       tone="success"
-                      body="This event can be closed whenever it is the active event."
+                      body="Ez az esemény lezárható, ha aktív eseményként van kijelölve."
                     />
                   )
                 ) : null}
@@ -577,9 +590,9 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
 
           ) : (
             <StatusCard
-              title="No event selected"
+              title="Nincs kiválasztott esemény"
               tone="warning"
-              body="Select an event from the list, or create a new one with the button above."
+              body="Válassz eseményt a listából, vagy hozz létre újat a fenti gombbal."
             />
           )}
         </div>
