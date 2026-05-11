@@ -168,6 +168,11 @@ section('Balance — insufficient funds guard (fixed)')
 const balanceBefore = 300
 const purchaseAmount = 500
 const balanceAfter = balanceBefore - purchaseAmount
+function canFinalizePositivePurchase({ balanceBefore, balanceAfter, allowSingleNegativePurchase }) {
+  if (balanceBefore < 0) return false
+  if (balanceAfter < 0 && !allowSingleNegativePurchase) return false
+  return true
+}
 
 assertEqual(balanceAfter, -200, 'Purchase of 500 with balance 300 → balanceAfter = -200')
 assert(
@@ -178,6 +183,19 @@ assert(
 assert(
   balanceAfter < 0,
   'balanceAfter < 0 → BLOCKED by new guard (insufficient balance error thrown)',
+)
+
+assert(
+  !canFinalizePositivePurchase({ balanceBefore, balanceAfter, allowSingleNegativePurchase: false }),
+  'balanceAfter < 0 -> blocked when one-time negative purchase is disabled',
+)
+assert(
+  canFinalizePositivePurchase({ balanceBefore, balanceAfter, allowSingleNegativePurchase: true }),
+  'balanceAfter < 0 -> allowed once when event toggle is enabled',
+)
+assert(
+  !canFinalizePositivePurchase({ balanceBefore: -200, balanceAfter: -700, allowSingleNegativePurchase: true }),
+  'Already negative balance -> blocked even when event toggle is enabled',
 )
 
 // 5. Basket items: summarizeBasketItems

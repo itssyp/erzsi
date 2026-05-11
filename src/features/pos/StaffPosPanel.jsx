@@ -703,6 +703,16 @@ export function StaffPosPanel({ eventId }) {
   const blockingBasketAction = selectionPending || finalizePending || cancelPending
   const blockingTypedQrAutoSelect = finalizePending || cancelPending
   const productsDisabled = !selectedPerson || blockingBasketAction
+  const selectedPersonBalance = Number.isFinite(selectedPerson?.balance) ? selectedPerson.balance : 0
+  const negativePurchaseEnabled = Boolean(activeEvent?.allowSingleNegativePurchase)
+  const shouldWarnDoNotServe = Boolean(
+    selectedPerson
+    && (
+      (!negativePurchaseEnabled && selectedPersonBalance <= 0)
+      || (negativePurchaseEnabled && selectedPersonBalance < 0)
+    ),
+  )
+  const productsPaymentBlocked = shouldWarnDoNotServe
   const customizationIsBurgerVisual = Boolean(
     customizingProduct
     && customizationState
@@ -1259,6 +1269,10 @@ export function StaffPosPanel({ eventId }) {
   }, [applyOptimisticBasketItems])
 
   const startCustomization = useCallback((product) => {
+    if (productsPaymentBlocked && !product.isDrsReturn && (product.price || 0) > 0) {
+      return
+    }
+
     const template = modifierTemplates.find((entry) => entry.id === product.modifierTemplateId)
 
     // Fun mode: burger/gyros products launch the catch game instead of the modal
@@ -1278,7 +1292,7 @@ export function StaffPosPanel({ eventId }) {
     }
     setCustomizingProduct({ product, template })
     setCustomizationState(createCustomizationState(template))
-  }, [modifierTemplates, addItemToBasket, funModeActive])
+  }, [modifierTemplates, addItemToBasket, funModeActive, productsPaymentBlocked])
 
   function handleConfirmCustomization() {
     if (!customizingProduct || !customizationState) return
@@ -1783,7 +1797,15 @@ export function StaffPosPanel({ eventId }) {
           </p>
         )}
 
-        <div className="product-grid-scroll">
+        <div className={`product-grid-blocker-shell${productsPaymentBlocked ? ' payment-blocked' : ''}`}>
+          {productsPaymentBlocked ? (
+            <div className="products-do-not-serve-overlay" role="alert">
+              <span className="product-warning-triangle">!</span>
+              <strong>NE SZOLGÁLD KI</strong>
+              <span>Le van gatyásodva az öreg</span>
+            </div>
+          ) : null}
+          <div className="product-grid-scroll">
           <div
             className="product-category-list"
             style={{ opacity: productsDisabled ? 0.45 : 1, pointerEvents: productsDisabled ? 'none' : 'auto' }}
@@ -1812,12 +1834,13 @@ export function StaffPosPanel({ eventId }) {
                       key={product.id}
                       product={product}
                       onClick={startCustomization}
-                      disabled={productsDisabled}
+                      disabled={productsDisabled || (productsPaymentBlocked && !product.isDrsReturn && (product.price || 0) > 0)}
                     />
                   ))}
                 </div>
               </section>
             ))}
+          </div>
           </div>
         </div>
 

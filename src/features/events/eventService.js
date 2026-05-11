@@ -28,6 +28,7 @@ import {
   buildEventRecord,
   buildKitchenStatusPatch,
   buildRuntimeRecord,
+  buildSingleNegativePurchasePatch,
   deriveEventCode,
 } from './eventModels'
 
@@ -255,6 +256,24 @@ export async function setKitchenClosedStatus({ eventId, isClosed, actorUid }) {
 
   const batch = writeBatch(db)
   batch.set(eventRef, buildKitchenStatusPatch({ isClosed, actorUid }), { merge: true })
+  batch.set(auditLogWrite.ref, auditLogWrite.data)
+  await batch.commit()
+}
+
+export async function setSingleNegativePurchaseStatus({ eventId, isEnabled, actorUid }) {
+  const eventRef = doc(db, getEventPath(eventId))
+  const auditLogWrite = createAuditLogWrite({
+    eventId,
+    type: AUDIT_TYPES.eventChange,
+    actorUid,
+    summary: isEnabled ? 'Enabled one-time negative balance purchases' : 'Disabled one-time negative balance purchases',
+    targetType: 'event',
+    targetId: eventId,
+    details: { allowSingleNegativePurchase: Boolean(isEnabled) },
+  })
+
+  const batch = writeBatch(db)
+  batch.set(eventRef, buildSingleNegativePurchasePatch({ isEnabled, actorUid }), { merge: true })
   batch.set(auditLogWrite.ref, auditLogWrite.data)
   await batch.commit()
 }

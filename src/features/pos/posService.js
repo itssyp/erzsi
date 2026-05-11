@@ -16,7 +16,7 @@ import {
   buildOpenBasketRecord,
   summarizeBasketItems,
 } from './basketModels'
-import { EVENT_SUBCOLLECTIONS, getEventCollectionPath, getEventScopedPath } from '../../lib/firestorePaths'
+import { EVENT_SUBCOLLECTIONS, getEventCollectionPath, getEventPath, getEventScopedPath } from '../../lib/firestorePaths'
 import { resolveAssignedQrToPerson } from '../qr/qrService'
 
 const STALE_BASKET_LOCK_MS = 45 * 1000
@@ -240,6 +240,7 @@ export async function finalizeBasket({
 }) {
   const basketRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.baskets, personId))
   const personRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.people, personId))
+  const eventRef = doc(db, getEventPath(eventId))
   const orderRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.orders)))
   const ledgerRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.ledgerEntries)))
   const drsReturnRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.drsReturns)))
@@ -257,6 +258,7 @@ export async function finalizeBasket({
   return runTransaction(db, async (transaction) => {
     const basketSnapshot = await transaction.get(basketRef)
     const personSnapshot = await transaction.get(personRef)
+    const eventSnapshot = await transaction.get(eventRef)
 
     if (!basketSnapshot.exists()) {
       throw new Error('Active basket was not found.')
@@ -268,6 +270,7 @@ export async function finalizeBasket({
 
     const basket = basketSnapshot.data()
     const person = { id: personSnapshot.id, ...personSnapshot.data() }
+    const event = eventSnapshot.exists() ? eventSnapshot.data() : null
 
     assertPersonOperational(person)
 
@@ -293,12 +296,13 @@ export async function finalizeBasket({
     const drsReturnCreditAmount = drsReturnQuantity * DRS_DEPOSIT_AMOUNT
     const balanceBefore = person.balance || 0
     const balanceAfter = balanceBefore - totalAmount
+    const allowSingleNegativePurchase = Boolean(event?.allowSingleNegativePurchase)
 
     if (totalAmount > 0 && balanceBefore < 0) {
       throw new Error(`${person.displayName} is already below zero and cannot purchase again yet.`)
     }
 
-    if (totalAmount > 0 && balanceAfter < 0) {
+    if (totalAmount > 0 && balanceAfter < 0 && !allowSingleNegativePurchase) {
       throw new Error(
         `${person.displayName} has insufficient balance. ` +
         `Balance: ${balanceBefore} HUF, Purchase: ${totalAmount} HUF.`,
@@ -360,6 +364,8 @@ export async function finalizeBasket({
           drsReturnCreditAmount,
           balanceBefore,
           balanceAfter,
+          allowSingleNegativePurchase,
+          usedSingleNegativePurchase: totalAmount > 0 && balanceBefore >= 0 && balanceAfter < 0 && allowSingleNegativePurchase,
         },
       },
     )

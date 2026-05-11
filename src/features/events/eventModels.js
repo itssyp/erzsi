@@ -21,6 +21,7 @@ export const EVENT_STATUSES = {
  * @property {unknown} updatedAt
  * @property {unknown | null} activatedAt
  * @property {unknown | null} closedAt
+ * @property {boolean} allowSingleNegativePurchase
  */
 
 /**
@@ -50,6 +51,7 @@ export function buildEventRecord({ name, code, startsOn, createdBy, activateNow 
     updatedAt: serverTimestamp(),
     activatedAt: activateNow ? serverTimestamp() : null,
     closedAt: null,
+    allowSingleNegativePurchase: false,
   }
 }
 
@@ -89,3 +91,10 @@ export function buildKitchenStatusPatch({ isClosed, actorUid }) {
   }
 }
 
+export function buildSingleNegativePurchasePatch({ isEnabled, actorUid }) {
+  return {
+    allowSingleNegativePurchase: Boolean(isEnabled),
+    updatedBy: actorUid,
+    updatedAt: serverTimestamp(),
+  }
+}

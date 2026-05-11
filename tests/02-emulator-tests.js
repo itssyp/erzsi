@@ -13,10 +13,12 @@
  *  G. Burst order creation throughput
  */
 
-import { initializeApp, cert, applicationDefault, deleteApp } from 'firebase-admin/app'
+/* global process */
+
+import { initializeApp, deleteApp } from 'firebase-admin/app'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
 import { PROJECT_ID, FIRESTORE_EMULATOR_HOST, TEST_EVENT_ID } from './config.js'
-import { assert, assertEqual, section, printStats, time, stats, resetCounts, printSummary } from './helpers.js'
+import { assert, assertEqual, section, printStats, time, printSummary } from './helpers.js'
 
 process.env.FIRESTORE_EMULATOR_HOST = FIRESTORE_EMULATOR_HOST
 
@@ -158,7 +160,7 @@ async function acquireBasketLock(personId, staffUid, sessionId) {
   return { ...result, retries }
 }
 
-async function finalizeBasket(personId, staffUid, sessionId) {
+async function finalizeBasket(personId, staffUid, sessionId, options = {}) {
   let retries = 0
   const orderRef = newOrderRef()
   const ledgerRef = newLedgerRef()
@@ -187,7 +189,7 @@ async function finalizeBasket(personId, staffUid, sessionId) {
     const totalAmount = basket.totalAmount || 0
     const balanceAfter = balanceBefore - totalAmount
 
-    if (balanceAfter < 0) {
+    if (balanceAfter < 0 && !options.allowSingleNegativePurchase) {
       throw new Error(`Insufficient balance. Balance: ${balanceBefore} HUF, Purchase: ${totalAmount} HUF.`)
     }
 
@@ -297,7 +299,7 @@ const CONCURRENT_TOPUPS = 10
 await createPerson(PERSON_A, INITIAL_BALANCE)
 console.log(`  Setup: person balance=${INITIAL_BALANCE}, ${CONCURRENT_TOPUPS} concurrent topups of ${TOPUP_AMOUNT} each`)
 
-const { result: topupResults, ms: topupTotalMs } = await time('Total time for concurrent topups', async () => {
+const { result: topupResults } = await time('Total time for concurrent topups', async () => {
   return Promise.allSettled(
     Array.from({ length: CONCURRENT_TOPUPS }, (_, i) =>
       topUpBalance(PERSON_A, `admin-${i}`, TOPUP_AMOUNT)
@@ -436,7 +438,6 @@ await ordersBatch.commit()
 // Query: hasFood + orderBy createdAt (NEEDS composite index)
 let foodOrdersOk = true
 try {
-  const { query, collection, where, orderBy } = await import('@google-cloud/firestore')
   // Use native Firestore query via admin SDK
   const foodSnap = await db.collection(`${EVENT_PATH}/orders`)
     .where('hasFood', '==', true)
@@ -525,7 +526,6 @@ const burstMs = performance.now() - burstStart
 
 const burstSuccess = burstResults.filter((r) => r.status === 'fulfilled')
 const burstFail = burstResults.filter((r) => r.status === 'rejected')
-const burstLatencies = burstSuccess.map((r) => r.value.retries) // not latency, using retries as proxy
 
 console.log(`  ${BURST_COUNT} concurrent finalizations: ${burstSuccess.length} OK, ${burstFail.length} failed`)
 console.log(`  Total elapsed: ${burstMs.toFixed(0)}ms`)
@@ -599,6 +599,20 @@ assertEqual(ledgerCountAfter, ledgerCountBefore, 'No ledger entry created on ins
 
 const personH1After = (await personRef(PERSON_H1).get()).data()
 assertEqual(personH1After.balance, 300, 'Person balance unchanged after blocked purchase')
+
+const PERSON_H1B = 'person-one-negative-purchase'
+await createPerson(PERSON_H1B, 300)
+await createBasketWithLock(PERSON_H1B, 'staff-h', 'session-h1b')
+const oneNegativeResult = await finalizeBasket(PERSON_H1B, 'staff-h', 'session-h1b', { allowSingleNegativePurchase: true })
+assertEqual(oneNegativeResult.balanceAfter, -700, 'One-time negative purchase can cross below zero when enabled')
+
+await createBasketWithLock(PERSON_H1B, 'staff-h', 'session-h1b-second')
+let oneNegativeRepeatError = null
+try {
+  await finalizeBasket(PERSON_H1B, 'staff-h', 'session-h1b-second', { allowSingleNegativePurchase: true })
+} catch (e) { oneNegativeRepeatError = e.message }
+assert(oneNegativeRepeatError !== null, 'Second purchase while still negative is blocked')
+assert(oneNegativeRepeatError?.toLowerCase().includes('zero'), `Repeat negative purchase error mentions zero — got: "${oneNegativeRepeatError}"`)
 
 // Test: person already below zero blocks purchase
 const PERSON_H2 = 'person-below-zero'

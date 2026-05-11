@@ -1810,6 +1810,16 @@ textarea:disabled {
   padding-right: 2px;
 }
 
+.product-grid-blocker-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
 .product-category-list {
   display: flex;
   flex-direction: column;
@@ -1845,6 +1855,8 @@ textarea:disabled {
 }
 
 .product-tile {
+  position: relative;
+  overflow: hidden;
   background: var(--surface);
   border: 1.5px solid var(--border);
   padding: 14px;
@@ -4502,6 +4514,81 @@ textarea:disabled {
     linear-gradient(180deg, #f6c46a 0%, #d9902f 100%);
 }
 
+.product-warning-triangle {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 32px;
+  color: #b91c1c;
+  font-size: 1.1rem;
+  font-weight: 1000;
+  line-height: 1;
+}
+
+.product-warning-triangle::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  background: #fff;
+}
+
+.product-grid-blocker-shell.payment-blocked .product-tile:not(.credit) {
+  opacity: 0.28;
+}
+
+.product-grid-blocker-shell.payment-blocked .product-tile.credit {
+  position: relative;
+  z-index: 30;
+}
+
+.products-do-not-serve-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 16px;
+  min-height: 100%;
+  border-radius: inherit;
+  background: rgba(185, 28, 28, 0.74);
+  color: #fff;
+  font-weight: 900;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  animation: doNotServePulse 1.25s ease-in-out infinite;
+}
+
+.products-do-not-serve-overlay strong {
+  font-size: clamp(1rem, 2.8vw, 1.4rem);
+  line-height: 1;
+}
+
+.products-do-not-serve-overlay span:last-child {
+  max-width: 28rem;
+  padding: 0 12px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+@keyframes doNotServePulse {
+  0%, 100% {
+    opacity: 0.62;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .burger-bun--top span::before,
 .burger-bun--top span::after {
   display: none;
@@ -5573,6 +5660,11 @@ textarea:disabled {
     min-height: auto;
     overflow: visible;
     padding-right: 0;
+  }
+
+  .product-grid-blocker-shell {
+    flex: initial;
+    min-height: auto;
   }
 
   .receipt-action-row {

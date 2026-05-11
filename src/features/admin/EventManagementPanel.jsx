@@ -10,6 +10,7 @@ import {
   closeEventAndCarryBalances,
   createEvent,
   ensureRuntimeDocument,
+  setSingleNegativePurchaseStatus,
   subscribeToEventsList,
 } from '../events/eventService'
 
@@ -318,6 +319,25 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
     }
   }
 
+  async function handleToggleSingleNegativePurchase(event) {
+    if (!selectedEventId) return
+    const isEnabled = event.target.checked
+    setSubmitting(true)
+    setErrorMessage('')
+    setStatusMessage('')
+
+    try {
+      await setSingleNegativePurchaseStatus({ eventId: selectedEventId, isEnabled, actorUid })
+      setStatusMessage(isEnabled
+        ? 'Egyszeri negatív vásárlás engedélyezve.'
+        : 'Egyszeri negatív vásárlás kikapcsolva.')
+    } catch (error) {
+      setErrorMessage(error.message || 'A beállítás mentése sikertelen.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   function openCreateForm() {
     setShowCreateForm(true)
     setSelectedEventId('')
@@ -525,6 +545,22 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                     </button>
                   ) : null}
                 </div>
+              </section>
+
+              <section className="panel">
+                <h3 className="card-title">POS egyenleg szabály</h3>
+                <p className="helper-text" style={{ marginBottom: '12px' }}>
+                  Ha be van kapcsolva, egy nem negatív egyenlegű persona még egyszer vásárolhat akkor is, ha ezzel mínuszba kerül. Amíg mínuszban van, újabb vásárlás nem zárható le feltöltés nélkül.
+                </p>
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selectedEvent.allowSingleNegativePurchase)}
+                    onChange={handleToggleSingleNegativePurchase}
+                    disabled={submitting || selectedEventLoading}
+                  />
+                  <span>Egyszeri negatív vásárlás engedélyezése</span>
+                </label>
               </section>
 
               {/* Carry-over readiness */}
