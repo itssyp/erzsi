@@ -41,5 +41,7 @@ coverage
 **/.env.*
 !.env.example
 !.env.sample
+!.env.*.example
 !**/.env.example
 !**/.env.sample
+!**/.env.*.example

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { subscribeToAccountsDirectory } from '../auth/accountService'
 import { ACCOUNT_STATUSES } from '../auth/accountModels'
+import { subscribeToPeople } from '../people/personService'
 import { ROLES } from '../../lib/roles'
 
 function formatTimestamp(value) {
@@ -19,14 +20,37 @@ function getStatusLabel(status) {
   }
 }
 
-export function RegisteredUsersPanel() {
+export function RegisteredUsersPanel({ eventId = null }) {
   const [accounts, setAccounts] = useState([])
+  const [people, setPeople] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
 
   useEffect(() => {
     return subscribeToAccountsDirectory(setAccounts, (error) => setErrorMessage(error.message))
   }, [])
+
+  useEffect(() => {
+    if (!eventId) {
+      setPeople([])
+      return undefined
+    }
+
+    return subscribeToPeople(eventId, setPeople, (error) => setErrorMessage(error.message))
+  }, [eventId])
+
+  const personaByAccountId = useMemo(() => {
+    const map = new Map()
+
+    people.forEach((person) => {
+      const accountId = person.linkedAccountId || person.linkedAuthUid
+      if (accountId) {
+        map.set(accountId, person)
+      }
+    })
+
+    return map
+  }, [people])
 
   const registeredUsers = useMemo(() => {
     return accounts.filter((account) => account.role === ROLES.user)
@@ -37,6 +61,7 @@ export function RegisteredUsersPanel() {
     if (!query) return registeredUsers
 
     return registeredUsers.filter((account) => {
+      const linkedPersona = personaByAccountId.get(account.uid || account.id)
       const haystack = [
         account.displayName,
         account.email,
@@ -46,11 +71,15 @@ export function RegisteredUsersPanel() {
         account.status,
         account.linkedPersonaId,
         account.personId,
+        linkedPersona?.displayName,
+        linkedPersona?.team,
+        linkedPersona?.shibboleth,
+        linkedPersona?.internalId,
       ].filter(Boolean).join(' ').toLowerCase()
 
       return haystack.includes(query)
     })
-  }, [registeredUsers, searchQuery])
+  }, [personaByAccountId, registeredUsers, searchQuery])
 
   return (
     <div className="admin-section">
@@ -76,24 +105,29 @@ export function RegisteredUsersPanel() {
         </div>
 
         <div className="registered-user-list">
-          {filteredUsers.map((account) => (
-            <article key={account.uid || account.id} className="registered-user-row">
-              <div className="registered-user-main">
-                <strong>{account.displayName || account.email || 'Névtelen felhasználó'}</strong>
-                <span>{account.email || 'Nincs e-mail'}</span>
-              </div>
-              <div className="registered-user-meta">
-                <span>{account.shibboleth || '-'}</span>
-                <span>{formatTimestamp(account.createdAt)}</span>
-              </div>
-              <div className="registered-user-pills">
-                <span className="event-pill">{getStatusLabel(account.status)}</span>
-                <span className={`event-pill${account.linkedPersonaId || account.personId ? ' status-active' : ''}`}>
-                  {account.linkedPersonaId || account.personId ? 'kötve' : 'nincs persona'}
-                </span>
-              </div>
-            </article>
-          ))}
+          {filteredUsers.map((account) => {
+            const linkedPersona = personaByAccountId.get(account.uid || account.id)
+            const hasLinkedPersona = Boolean(linkedPersona || account.linkedPersonaId || account.personId)
+
+            return (
+              <article key={account.uid || account.id} className="registered-user-row">
+                <div className="registered-user-main">
+                  <strong>{account.displayName || account.email || 'Névtelen felhasználó'}</strong>
+                  <span>{account.email || 'Nincs e-mail'}</span>
+                </div>
+                <div className="registered-user-meta">
+                  <span>{account.shibboleth || '-'}</span>
+                  <span>{linkedPersona?.displayName || formatTimestamp(account.createdAt)}</span>
+                </div>
+                <div className="registered-user-pills">
+                  <span className="event-pill">{getStatusLabel(account.status)}</span>
+                  <span className={`event-pill${hasLinkedPersona ? ' status-active' : ''}`}>
+                    {hasLinkedPersona ? 'kötve' : 'nincs persona'}
+                  </span>
+                </div>
+              </article>
+            )
+          })}
 
           {registeredUsers.length === 0 ? (
             <p className="helper-text">Még nincs regisztrált felhasználó.</p>

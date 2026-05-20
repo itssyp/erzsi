@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "erzsi-2"
+    "default": "erzsi-2",
+    "prod": "erzsi-2",
+    "staging": "erzsi-2-staging"
   }
 }

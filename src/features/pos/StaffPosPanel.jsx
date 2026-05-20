@@ -9,6 +9,7 @@ import { useQrScanner } from '../qr/useQrScanner'
 import { usePosSession } from './usePosSession'
 import { PRODUCT_CATEGORIES, subscribeToProducts } from '../products/productService'
 import { isFoodCategory, normalizeProductCategory } from '../products/productModels'
+import { tryNormalizeProductBarcode } from '../products/productBarcodes'
 import { getPersonDisplayId } from '../people/personModels'
 import {
   acquireBasketLock,
@@ -40,7 +41,9 @@ const DRS_RETURN_PRODUCT = Object.freeze({
   isActive: true,
   isDrsReturn: true,
 })
-const allCategories = ['all', ...PRODUCT_CATEGORIES, MISC_CATEGORY]
+// PRODUCT_CATEGORIES already includes MISC_CATEGORY ('Egyéb'); dedupe defensively
+// so this list remains correct even if either constant is reordered later.
+const allCategories = ['all', ...PRODUCT_CATEGORIES.filter((c) => c !== MISC_CATEGORY), MISC_CATEGORY]
 const BASKET_ABANDON_CANCEL_MS = 60 * 1000
 const BASKET_HEARTBEAT_MS = 15 * 1000
 const BASKET_SYNC_DEBOUNCE_MS = 220
@@ -90,6 +93,7 @@ const GYROS_SPRITE_KEYWORDS = Object.freeze([
   { kind: 'gyrosmeat', keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
   { kind: 'yogurt',    keywords: ['joghurt', 'joghurtos'] },
   { kind: 'spicy',     keywords: ['csipos', 'csípős', 'csipős', 'spicy', 'eros', 'erős'] },
+  { kind: 'cucumber',  keywords: ['uborka', 'uborkás', 'cucumber'] },
   { kind: 'onion',     keywords: ['hagyma', 'onion'] },
   { kind: 'lettuce',   keywords: ['salata', 'saláta', 'lettuce'] },
   { kind: 'tomato',    keywords: ['paradicsom', 'tomato'] },
@@ -99,10 +103,30 @@ const GYROS_LAYER_ORDER = Object.freeze({
   spicy: 3,
   yogurt: 5,
   tomato: 10,
+  cucumber: 12,
   lettuce: 15,
   onion: 20,
   'gyrosmeat:extra': 25,
   gyrosmeat: 30,
+})
+
+const PIZZA_TRIGGER_PATTERN  = /\bpizza\b/i
+const PIZZA_SPRITE_KEYWORDS = Object.freeze([
+  { kind: 'pizzasauce', keywords: ['paradicsomszosz', 'paradicsomszósz', 'pizza szosz', 'alap szosz', 'szosz', 'szósz', 'sauce'] },
+  { kind: 'mozzarella', keywords: ['mozzarella', 'sajt', 'cheese'] },
+  { kind: 'pepperoni',  keywords: ['pepperoni', 'szalami', 'szalámi'] },
+  { kind: 'ham',        keywords: ['sonka', 'ham'] },
+  { kind: 'mushroom',   keywords: ['gomba', 'mushroom'] },
+  { kind: 'corn',       keywords: ['kukorica', 'corn'] },
+])
+// Lower = rendered first = appears underneath; mozzarella last = renders on top of all toppings
+const PIZZA_LAYER_ORDER = Object.freeze({
+  pizzasauce: 1,
+  mozzarella: 2,
+  pepperoni:  3,
+  ham:        4,
+  mushroom:   5,
+  corn:       6,
 })
 
 function CameraIcon() {
@@ -178,6 +202,10 @@ function isGyrosVisualTemplate(product, template) {
   return GYROS_TRIGGER_PATTERN.test(`${product?.name || ''} ${template?.name || ''}`)
 }
 
+function isPizzaVisualTemplate(product, template) {
+  return PIZZA_TRIGGER_PATTERN.test(`${product?.name || ''} ${template?.name || ''}`)
+}
+
 function getBurgerSpriteKind(label) {
   const normalizedLabel = normalizeIngredientLabel(label)
   const match = BURGER_SPRITE_KEYWORDS.find((entry) =>
@@ -203,6 +231,35 @@ function getGyrosSpriteKind(label) {
 function getGyrosLayerOrder(layer) {
   const sourceKey = layer.source === 'extra' ? `${layer.spriteKind}:extra` : layer.spriteKind
   return GYROS_LAYER_ORDER[sourceKey] ?? GYROS_LAYER_ORDER[layer.spriteKind] ?? 90
+}
+
+function getPizzaSpriteKind(label) {
+  const normalizedLabel = normalizeIngredientLabel(label)
+  const match = PIZZA_SPRITE_KEYWORDS.find((entry) =>
+    entry.keywords.some((keyword) => normalizedLabel.includes(normalizeIngredientLabel(keyword))),
+  )
+  return match?.kind || null
+}
+
+function getPizzaLayerState(template, customizationState) {
+  const toppings = []
+  const unknownIngredients = []
+
+  ;(template.defaultIncludedIngredients || []).forEach((ingredient) => {
+    const spriteKind = getPizzaSpriteKind(ingredient.label)
+    const entry = {
+      ...ingredient,
+      spriteKind,
+      source: 'default',
+      included: customizationState?.includedIngredientIds.has(ingredient.id) || false,
+    }
+    if (spriteKind) toppings.push(entry)
+    else unknownIngredients.push(entry)
+  })
+
+  toppings.sort((a, b) => (PIZZA_LAYER_ORDER[a.spriteKind] ?? 99) - (PIZZA_LAYER_ORDER[b.spriteKind] ?? 99))
+
+  return { toppings, unknownIngredients }
 }
 
 function getGyrosLayerState(template, customizationState) {
@@ -427,7 +484,6 @@ function GyrosCustomizer({ template, customizationState, onToggleIngredient, onR
   return (
     <div className="burger-customizer">
       <div className="gyros-stage" aria-label="Gyros összetevők">
-        <div className="gyros-wrap gyros-wrap--top" aria-hidden="true" />
 
         <div className="burger-stack">
           {visibleLayers.length ? (
@@ -454,6 +510,39 @@ function GyrosCustomizer({ template, customizationState, onToggleIngredient, onR
         <span className="burger-chip-panel-title">Összetevők</span>
         <div className="burger-chip-row">
           {[...knownIngredients, ...unknownIngredients].map((ingredient) => (
+            <IngredientToggleChip
+              key={ingredient.id}
+              ingredient={ingredient}
+              onToggle={() => onToggleIngredient(ingredient.id)}
+            />
+          ))}
+        </div>
+        {extrasContent}
+      </div>
+    </div>
+  )
+}
+
+function PizzaCustomizer({ template, customizationState, onToggleIngredient, extrasContent }) {
+  const { toppings, unknownIngredients } = getPizzaLayerState(template, customizationState)
+
+  return (
+    <div className="pizza-customizer">
+      <div className="pizza-stage" aria-label="Pizza összetevők">
+        <div className="pizza-visual">
+          {toppings.map((topping) => (
+            <div
+              key={topping.id}
+              className={`pizza-topping pizza-topping--${topping.spriteKind}${topping.included ? '' : ' is-removed'}`}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="pizza-chip-panel burger-chip-panel">
+        <span className="burger-chip-panel-title">Feltétek</span>
+        <div className="burger-chip-row">
+          {[...toppings, ...unknownIngredients].map((ingredient) => (
             <IngredientToggleChip
               key={ingredient.id}
               ingredient={ingredient}
@@ -551,6 +640,7 @@ export function StaffPosPanel({ eventId }) {
   const [funModeActive, setFunModeActive] = useState(false)
   const [burgerGameProduct, setBurgerGameProduct] = useState(null)
   const [gyrosGameProduct, setGyrosGameProduct] = useState(null)
+  const [pizzaGameProduct, setPizzaGameProduct] = useState(null)
   const funLongPressRef = useRef(null)
   const [spritzerGuideOpen, setSpritzerGuideOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
@@ -574,8 +664,10 @@ export function StaffPosPanel({ eventId }) {
   const keyboardScannerBufferRef = useRef('')
   const keyboardScannerLastKeyAtRef = useRef(0)
   const keyboardScannerFlushTimerRef = useRef(null)
+  const hiddenScannerFlushTimerRef = useRef(null)
   const hiddenScannerInputRef = useRef(null)
   const selectedPersonRef = useRef(null)
+  const startCustomizationRef = useRef(() => {})
   const flushBasketDraftRef = useRef(async () => {})
   const activeBasketSnapshotRef = useRef({
     personDisplayName: '',
@@ -676,6 +768,19 @@ export function StaffPosPanel({ eventId }) {
         return left.name.localeCompare(right.name, 'hu')
       })
     if (selectedCategory === 'all' || selectedCategory === MISC_CATEGORY) {
+      // Insert the DRS return at the very start of the Egyéb group so it
+      // always appears first, with any user-defined Egyéb products after it.
+      // If no Egyéb products exist yet, this falls back to appending at the end.
+      const firstMiscIdx = visibleProducts.findIndex(
+        (p) => normalizeProductCategory(p.category) === MISC_CATEGORY,
+      )
+      if (firstMiscIdx >= 0) {
+        return [
+          ...visibleProducts.slice(0, firstMiscIdx),
+          DRS_RETURN_PRODUCT,
+          ...visibleProducts.slice(firstMiscIdx),
+        ]
+      }
       return [...visibleProducts, DRS_RETURN_PRODUCT]
     }
     return visibleProducts
@@ -694,6 +799,28 @@ export function StaffPosPanel({ eventId }) {
 
     return Array.from(groups, ([category, items]) => ({ category, items }))
   }, [availableProducts])
+  const productsByBarcode = useMemo(() => {
+    const index = new Map()
+
+    products
+      .filter((product) => product.isActive)
+      .forEach((product) => {
+        const normalizedCategory = normalizeProductCategory(product.category)
+        const isUnavailable = Boolean(product.isTemporarilyUnavailable)
+          || (isFoodCategory(normalizedCategory) && activeEvent?.isKitchenClosed)
+        const normalizedProduct = {
+          ...product,
+          category: normalizedCategory,
+          isTemporarilyUnavailable: isUnavailable,
+        }
+
+        ;(product.barcodes || []).forEach((barcode) => {
+          index.set(barcode, normalizedProduct)
+        })
+      })
+
+    return index
+  }, [activeEvent?.isKitchenClosed, products])
 
   const showProductCategoryHeadings = selectedCategory === 'all'
 
@@ -723,7 +850,12 @@ export function StaffPosPanel({ eventId }) {
     && customizationState
     && isGyrosVisualTemplate(customizingProduct.product, customizingProduct.template),
   )
-  const customizationIsWideVisual = customizationIsBurgerVisual || customizationIsGyrosVisual
+  const customizationIsPizzaVisual = Boolean(
+    customizingProduct
+    && customizationState
+    && isPizzaVisualTemplate(customizingProduct.product, customizingProduct.template),
+  )
+  const customizationIsWideVisual = customizationIsBurgerVisual || customizationIsGyrosVisual || customizationIsPizzaVisual
 
   selectedPersonRef.current = selectedPerson
   activeBasketSnapshotRef.current = {
@@ -836,6 +968,52 @@ export function StaffPosPanel({ eventId }) {
     return true
   }, [blockingTypedQrAutoSelect, focusHiddenScannerInput, resolvePersonFromQr])
 
+  const handleCompletedScannerInput = useCallback((rawValue) => {
+    const trimmedValue = String(rawValue || '').trim()
+
+    if (!trimmedValue) {
+      return false
+    }
+
+    if (tryAutoSelectQr(trimmedValue)) {
+      return true
+    }
+
+    const barcode = tryNormalizeProductBarcode(trimmedValue)
+    if (!barcode) {
+      return false
+    }
+
+    const product = productsByBarcode.get(barcode)
+    if (!product) {
+      setErrorMessage(`Nincs termek ehhez a vonalkodhoz: ${barcode}`)
+      return true
+    }
+
+    if (!selectedPersonRef.current) {
+      setErrorMessage('Elobb valassz vendeget.')
+      return true
+    }
+
+    if (blockingBasketAction) {
+      return true
+    }
+
+    if (product.isTemporarilyUnavailable) {
+      setErrorMessage(`A(z) ${product.name} most nem elerheto.`)
+      return true
+    }
+
+    if (productsPaymentBlocked && !product.isDrsReturn && (product.price || 0) > 0) {
+      setErrorMessage('Ne szolgald ki: a vendeg egyenlege nem engedi a vasarlast.')
+      return true
+    }
+
+    setErrorMessage('')
+    startCustomizationRef.current(product)
+    return true
+  }, [blockingBasketAction, productsByBarcode, productsPaymentBlocked, tryAutoSelectQr])
+
   useEffect(() => {
     tryAutoSelectQr(searchQuery)
   }, [searchQuery, tryAutoSelectQr])
@@ -854,7 +1032,7 @@ export function StaffPosPanel({ eventId }) {
       keyboardScannerBufferRef.current = ''
 
       if (bufferedValue.length >= QR_CODE_LENGTH) {
-        tryAutoSelectQr(bufferedValue)
+        handleCompletedScannerInput(bufferedValue)
       }
     }
 
@@ -911,7 +1089,7 @@ export function StaffPosPanel({ eventId }) {
       }
 
       const pastedValue = event.clipboardData?.getData('text') || ''
-      if (pastedValue && tryAutoSelectQr(pastedValue)) {
+      if (pastedValue && handleCompletedScannerInput(pastedValue)) {
         event.preventDefault()
       }
     }
@@ -923,7 +1101,7 @@ export function StaffPosPanel({ eventId }) {
       window.removeEventListener('keydown', handleGlobalKeyDown, true)
       window.removeEventListener('paste', handleGlobalPaste, true)
     }
-  }, [cameraOpen, customizingProduct, tryAutoSelectQr])
+  }, [cameraOpen, customizingProduct, handleCompletedScannerInput])
 
   useEffect(() => {
     const focusTimer = window.setTimeout(focusHiddenScannerInput, 0)
@@ -939,18 +1117,41 @@ export function StaffPosPanel({ eventId }) {
     }
   }, [focusHiddenScannerInput, selectionPending, selectedPerson])
 
+  useEffect(() => () => {
+    if (hiddenScannerFlushTimerRef.current) {
+      window.clearTimeout(hiddenScannerFlushTimerRef.current)
+      hiddenScannerFlushTimerRef.current = null
+    }
+  }, [])
+
   function handleHiddenScannerInputBlur() {
     window.setTimeout(focusHiddenScannerInput, 0)
   }
 
-  function handleHiddenScannerInputChange(event) {
-    const nextValue = event.target.value
-
-    if (tryAutoSelectQr(nextValue)) {
-      event.target.value = ''
-    } else if (nextValue.length > 512) {
-      event.target.value = nextValue.slice(-512)
+  function clearHiddenScannerInputFlushTimer() {
+    if (hiddenScannerFlushTimerRef.current) {
+      window.clearTimeout(hiddenScannerFlushTimerRef.current)
+      hiddenScannerFlushTimerRef.current = null
     }
+  }
+
+  function flushHiddenScannerInput(input) {
+    clearHiddenScannerInputFlushTimer()
+    if (!input.value) {
+      return
+    }
+
+    if (handleCompletedScannerInput(input.value)) {
+      input.value = ''
+    } else if (input.value.length > 512) {
+      input.value = input.value.slice(-512)
+    }
+  }
+
+  function handleHiddenScannerInputChange(event) {
+    const input = event.target
+    clearHiddenScannerInputFlushTimer()
+    hiddenScannerFlushTimerRef.current = window.setTimeout(() => flushHiddenScannerInput(input), KEYBOARD_SCANNER_FLUSH_MS)
   }
 
   function handleHiddenScannerInputKeyDown(event) {
@@ -959,7 +1160,7 @@ export function StaffPosPanel({ eventId }) {
     }
 
     const input = event.currentTarget
-    if (input.value && tryAutoSelectQr(input.value)) {
+    if (input.value && handleCompletedScannerInput(input.value)) {
       event.preventDefault()
       input.value = ''
     }
@@ -1286,6 +1487,11 @@ export function StaffPosPanel({ eventId }) {
       return
     }
 
+    if (funModeActive && template && isPizzaVisualTemplate(product, template)) {
+      setPizzaGameProduct({ product, template })
+      return
+    }
+
     if (!template) {
       addItemToBasket(product, null)
       return
@@ -1293,6 +1499,8 @@ export function StaffPosPanel({ eventId }) {
     setCustomizingProduct({ product, template })
     setCustomizationState(createCustomizationState(template))
   }, [modifierTemplates, addItemToBasket, funModeActive, productsPaymentBlocked])
+
+  startCustomizationRef.current = startCustomization
 
   function handleConfirmCustomization() {
     if (!customizingProduct || !customizationState) return
@@ -1564,7 +1772,7 @@ export function StaffPosPanel({ eventId }) {
               id="personSearch"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Keresés név vagy 5 számjegyű kód alapján..."
+              placeholder="Keresés név vagy 4 számjegyű kód alapján..."
               autoComplete="off"
             />
             <button
@@ -1895,8 +2103,19 @@ export function StaffPosPanel({ eventId }) {
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                width: customizationIsWideVisual ? 'min(860px, calc(100vw - 40px))' : 'min(680px, calc(100vw - 40px))',
-                maxHeight: 'calc(100vh - 80px)',
+                /*
+                 * Pizza modal: size exactly = pizza + chip panel + chrome,
+                 * with a 24px breathing margin on every side of the screen.
+                 *   vertical chrome (margins 48 + header 60 + bodyPad 16 + footer 56) = 180px
+                 *   horizontal chrome (margins 48 + bodyPad 24 + gap 22 + chip 260)   = 354px
+                 */
+                width: customizationIsPizzaVisual
+                  ? 'calc(min(calc(100vh - 180px), calc(100vw - 354px)) + 306px)'
+                  : customizationIsWideVisual ? 'min(860px, calc(100vw - 40px))' : 'min(680px, calc(100vw - 40px))',
+                height: customizationIsPizzaVisual
+                  ? 'calc(min(calc(100vh - 180px), calc(100vw - 354px)) + 132px)'
+                  : undefined,
+                maxHeight: customizationIsPizzaVisual ? 'calc(100vh - 48px)' : 'calc(100vh - 40px)',
                 zIndex: 1000,
                 background: 'white',
                 borderRadius: 'var(--radius-lg)',
@@ -1907,7 +2126,7 @@ export function StaffPosPanel({ eventId }) {
               }}
             >
               {/* Modal header */}
-              <div className="customization-modal-header" style={{ padding: '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+              <div className="customization-modal-header" style={{ padding: customizationIsPizzaVisual ? '12px 20px' : '20px 24px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
                 <div>
                   <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted)', marginBottom: '3px' }}>
                     Testreszabás
@@ -1922,9 +2141,22 @@ export function StaffPosPanel({ eventId }) {
               </div>
 
               {/* Modal body */}
-              <div className={`customization-modal-body${customizationIsWideVisual ? ' is-burger' : ''}`} style={{ flex: 1, padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
+              <div className={`customization-modal-body${customizationIsWideVisual ? ' is-burger' : ''}`} style={{ flex: 1, padding: customizationIsPizzaVisual ? '8px 12px' : '20px 24px', display: 'flex', flexDirection: 'column' }}>
                 <div className={`dashboard-grid${customizationIsWideVisual ? ' customization-grid--burger' : ''}`} style={{ flex: 1, minHeight: 0 }}>
-                  {customizationIsGyrosVisual ? (
+                  {customizationIsPizzaVisual ? (
+                    <PizzaCustomizer
+                      template={customizingProduct.template}
+                      customizationState={customizationState}
+                      onToggleIngredient={toggleCustomizationIngredient}
+                      extrasContent={(
+                        <CustomizationExtras
+                          extras={customizationState?.extras}
+                          onAdjustQuantity={adjustCustomizationExtraQuantity}
+                          onUpdateQuantity={updateCustomizationExtraQuantity}
+                        />
+                      )}
+                    />
+                  ) : customizationIsGyrosVisual ? (
                     <GyrosCustomizer
                       template={customizingProduct.template}
                       customizationState={customizationState}
@@ -1968,7 +2200,7 @@ export function StaffPosPanel({ eventId }) {
                     </div>
                   )}
 
-                  {!customizationIsBurgerVisual && (customizationState?.extras || []).length > 0 && (
+                  {!customizationIsBurgerVisual && !customizationIsGyrosVisual && !customizationIsPizzaVisual && (customizationState?.extras || []).length > 0 && (
                     <div className="stack-block" style={{ gap: '8px' }}>
                       <h5 className="card-title" style={{ marginBottom: '4px' }}>Extrák</h5>
                       {customizationState.extras.map((extra) => (
@@ -2018,7 +2250,7 @@ export function StaffPosPanel({ eventId }) {
               </div>
 
               {/* Modal footer */}
-              <div className="customization-modal-footer" style={{ padding: '16px 24px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
+              <div className="customization-modal-footer" style={{ padding: customizationIsPizzaVisual ? '10px 20px' : '16px 24px', borderTop: '1px solid var(--border)', flexShrink: 0 }}>
                 <button
                   type="button"
                   className="primary-button"
@@ -2057,6 +2289,20 @@ export function StaffPosPanel({ eventId }) {
             addItemToBasket(product, customization)
           }}
           onCancel={() => setGyrosGameProduct(null)}
+        />
+      ) : null}
+
+      {pizzaGameProduct ? (
+        <BurgerCatchGame
+          variant="pizza"
+          product={pizzaGameProduct.product}
+          template={pizzaGameProduct.template}
+          onComplete={(customization) => {
+            const { product } = pizzaGameProduct
+            setPizzaGameProduct(null)
+            addItemToBasket(product, customization)
+          }}
+          onCancel={() => setPizzaGameProduct(null)}
         />
       ) : null}
     </div>

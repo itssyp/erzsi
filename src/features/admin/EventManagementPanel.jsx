@@ -227,7 +227,7 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
         setLoadingEvents(false)
       },
       (error) => {
-        setErrorMessage(error.message)
+        setErrorMessage(`Eseménylista betöltése sikertelen: ${error.message}`)
         setLoadingEvents(false)
       },
     )

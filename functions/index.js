@@ -7,12 +7,23 @@ import { HttpsError, onCall } from 'firebase-functions/v2/https'
 import { defineString } from 'firebase-functions/params'
 
 initializeApp()
-setGlobalOptions({ region: 'europe-west1', maxInstances: 10, cors: true })
+
+const callableCorsOrigins = [
+  'https://kasszaserzsi.hu',
+  'https://www.kasszaserzsi.hu',
+  'https://staging.kasszaserzsi.hu',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  /^http:\/\/localhost:\d+$/,
+  /^http:\/\/127\.0\.0\.1:\d+$/,
+]
+
+setGlobalOptions({ region: 'europe-west1', maxInstances: 10, cors: callableCorsOrigins })
 
 const adminAuth = getAuth()
 const db = getFirestore()
 const bootstrapAdminEmails = defineString('BOOTSTRAP_ADMIN_EMAILS')
-const callableOptions = { cors: true }
+const callableOptions = { cors: callableCorsOrigins }
 
 const QR_CODE_LENGTH = 4
 const QR_CODE_MIN = 1000
@@ -20,6 +31,7 @@ const QR_CODE_MAX_EXCLUSIVE = 10000
 const QR_PUBLIC_BASE_URL = 'https://kasszaserzsi.hu'
 const MAX_QR_GENERATION_BATCH = 250
 const MAX_QR_INPUT_LENGTH = 512
+const MAX_QR_IMPORT_BATCH = 1000
 
 const QR_STATUSES = {
   unassigned: 'unassigned',
@@ -35,10 +47,29 @@ const AUDIT_TYPES = {
   qrRevocation: 'qrRevocation',
   qrReset: 'qrReset',
   eventChange: 'eventChange',
+  topup: 'topup',
 }
 
+const LEDGER_ENTRY_TYPES = {
+  topup: 'topup',
+}
+
+const PERSON_RECORD_STATUSES = {
+  deleted: 'deleted',
+}
+
+const ROLES = {
+  admin: 'admin',
+  staff: 'staff',
+  posStaff: 'pos_staff',
+  topupStaff: 'topup_staff',
+  user: 'user',
+}
+
+const validRoles = new Set(Object.values(ROLES))
+
 function normalizeRole(role) {
-  return role === 'admin' || role === 'staff' || role === 'user' ? role : 'user'
+  return validRoles.has(role) ? role : ROLES.user
 }
 
 function parseEmailAllowlist() {
@@ -59,7 +90,7 @@ function ensureAuthenticated(request) {
 function ensureAdmin(request) {
   const authContext = ensureAuthenticated(request)
 
-  if (authContext.token.role !== 'admin') {
+  if (authContext.token.role !== ROLES.admin) {
     throw new HttpsError('permission-denied', 'Admin privileges are required.')
   }
 
@@ -70,11 +101,32 @@ function ensureStaffLike(request) {
   const authContext = ensureAuthenticated(request)
   const role = authContext.token.role
 
-  if (role !== 'admin' && role !== 'staff') {
+  if (role !== ROLES.admin && role !== ROLES.staff && role !== ROLES.posStaff) {
     throw new HttpsError('permission-denied', 'Staff or admin privileges are required.')
   }
 
   return authContext
+}
+
+function ensureTopupLike(request) {
+  const authContext = ensureAuthenticated(request)
+  const role = authContext.token.role
+
+  if (role !== ROLES.admin && role !== ROLES.topupStaff) {
+    throw new HttpsError('permission-denied', 'Top-up privileges are required.')
+  }
+
+  return authContext
+}
+
+function parsePositiveHufAmount(rawValue) {
+  const amount = Number.parseInt(`${rawValue ?? ''}`.trim(), 10)
+
+  if (!Number.isInteger(amount) || amount <= 0) {
+    throw new HttpsError('invalid-argument', 'amount must be a positive integer HUF value.')
+  }
+
+  return amount
 }
 
 function normalizeEventId(rawValue) {
@@ -177,6 +229,36 @@ function normalizeScannedQrCode(rawValue) {
   throw new HttpsError('invalid-argument', `QR input must be a ${QR_CODE_LENGTH}-digit code or a supported QR link.`)
 }
 
+function normalizeQrCredentialInputs(rawValue) {
+  const rawItems = Array.isArray(rawValue)
+    ? rawValue
+    : `${rawValue ?? ''}`.split(/[\s,;]+/g)
+  const codes = []
+  const seen = new Set()
+
+  rawItems.forEach((item) => {
+    const value = `${item ?? ''}`.trim()
+    if (!value) return
+
+    const code = normalizeScannedQrCode(value)
+
+    if (!seen.has(code)) {
+      seen.add(code)
+      codes.push(code)
+    }
+  })
+
+  if (!codes.length) {
+    throw new HttpsError('invalid-argument', 'At least one QR code or QR link is required.')
+  }
+
+  if (codes.length > MAX_QR_IMPORT_BATCH) {
+    throw new HttpsError('invalid-argument', `At most ${MAX_QR_IMPORT_BATCH} QR codes can be imported at once.`)
+  }
+
+  return codes
+}
+
 function getAccountRef(uid) {
   return db.doc(`accounts/${uid}`)
 }
@@ -222,6 +304,28 @@ function buildAuditLogRecord({
     targetId,
     personId,
     details,
+    createdAt: FieldValue.serverTimestamp(),
+  }
+}
+
+function buildLedgerEntryRecord({
+  type,
+  actorUid,
+  personId,
+  amount,
+  balanceBefore,
+  balanceAfter,
+  reason = '',
+}) {
+  return {
+    type,
+    actorUid,
+    personId,
+    amount,
+    balanceBefore,
+    balanceAfter,
+    currency: 'HUF',
+    reason,
     createdAt: FieldValue.serverTimestamp(),
   }
 }
@@ -381,17 +485,17 @@ export const bootstrapAdminSession = onCall(async (request) => {
 
   await adminAuth.setCustomUserClaims(authContext.uid, {
     ...(userRecord.customClaims || {}),
-    role: 'admin',
+    role: ROLES.admin,
   })
 
   await upsertAccountDocument({
     uid: authContext.uid,
     email: userRecord.email,
     displayName: userRecord.displayName,
-    role: 'admin',
+    role: ROLES.admin,
   })
 
-  return { role: 'admin', elevated: true }
+  return { role: ROLES.admin, elevated: true }
 })
 
 export const createPrivilegedAccount = onCall(async (request) => {
@@ -405,8 +509,8 @@ export const createPrivilegedAccount = onCall(async (request) => {
     throw new HttpsError('invalid-argument', 'Email and password are required.')
   }
 
-  if (role === 'user') {
-    throw new HttpsError('invalid-argument', 'Use this function only for staff or admin accounts.')
+  if (role === ROLES.user) {
+    throw new HttpsError('invalid-argument', 'Use this function only for privileged staff or admin accounts.')
   }
 
   const userRecord = await adminAuth.createUser({
@@ -491,6 +595,73 @@ export const disablePrivilegedAccount = onCall(async (request) => {
   }
 })
 
+export const topUpPersonBalance = onCall(callableOptions, async (request) => {
+  const authContext = ensureTopupLike(request)
+  const eventId = normalizeEventId(request.data?.eventId)
+  const personId = normalizePersonId(request.data?.personId)
+  const amount = parsePositiveHufAmount(request.data?.amount)
+  const personRef = getPersonRef(eventId, personId)
+  const ledgerRef = db.collection(`${getEventPath(eventId)}/ledgerEntries`).doc()
+  const auditRef = createAuditLogRef(eventId)
+
+  await db.runTransaction(async (transaction) => {
+    const personSnapshot = await transaction.get(personRef)
+
+    if (!personSnapshot.exists) {
+      throw new HttpsError('not-found', 'Person record was not found.')
+    }
+
+    const person = personSnapshot.data()
+
+    if (person.recordStatus === PERSON_RECORD_STATUSES.deleted) {
+      throw new HttpsError('failed-precondition', 'Deleted person records cannot receive top-ups.')
+    }
+
+    const balanceBefore = Number.isFinite(person.balance) ? person.balance : 0
+    const balanceAfter = balanceBefore + amount
+
+    transaction.set(
+      personRef,
+      {
+        balance: balanceAfter,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )
+    transaction.set(
+      ledgerRef,
+      buildLedgerEntryRecord({
+        type: LEDGER_ENTRY_TYPES.topup,
+        actorUid: authContext.uid,
+        personId,
+        amount,
+        balanceBefore,
+        balanceAfter,
+        reason: '',
+      }),
+    )
+    transaction.set(
+      auditRef,
+      buildAuditLogRecord({
+        type: AUDIT_TYPES.topup,
+        actorUid: authContext.uid,
+        summary: `Top-up applied to person ${personId}`,
+        targetType: 'personBalance',
+        targetId: personId,
+        personId,
+        details: {
+          amount,
+          balanceBefore,
+          balanceAfter,
+          reason: null,
+        },
+      }),
+    )
+  })
+
+  return { personId, amount }
+})
+
 export const generateQrCredentials = onCall(async (request) => {
   const authContext = ensureAdmin(request)
   const eventId = normalizeEventId(request.data?.eventId)
@@ -567,6 +738,116 @@ export const generateQrCredentials = onCall(async (request) => {
     count: createdCredentials.length,
     credentials: createdCredentials,
   }
+})
+
+export const importQrCredentials = onCall(callableOptions, async (request) => {
+  const authContext = ensureAdmin(request)
+  const eventId = normalizeEventId(request.data?.eventId)
+  const codes = normalizeQrCredentialInputs(request.data?.codes)
+  const eventSnapshot = await getEventDocRef(eventId).get()
+
+  if (!eventSnapshot.exists) {
+    throw new HttpsError('not-found', 'Event was not found.')
+  }
+
+  const createdCredentials = []
+  const skippedCredentials = []
+  const batch = db.batch()
+
+  const snapshots = await Promise.all(
+    codes.map((code) => getQrCredentialRef(eventId, code).get()),
+  )
+
+  codes.forEach((code, index) => {
+    const snapshot = snapshots[index]
+    const link = buildQrCredentialLink(code)
+
+    if (snapshot.exists) {
+      const existing = normalizeQrCredentialSnapshot(snapshot)
+      skippedCredentials.push({
+        code,
+        reason: existing.status === QR_STATUSES.assigned ? 'assigned' : 'exists',
+      })
+      return
+    }
+
+    batch.set(
+      getQrCredentialRef(eventId, code),
+      buildQrCredentialCreateRecord({
+        code,
+        link,
+        actorUid: authContext.uid,
+      }),
+    )
+    createdCredentials.push({ id: code, code, link, status: QR_STATUSES.unassigned })
+  })
+
+  if (createdCredentials.length) {
+    batch.set(
+      createAuditLogRef(eventId),
+      buildAuditLogRecord({
+        type: AUDIT_TYPES.qrGeneration,
+        actorUid: authContext.uid,
+        summary: `Imported ${createdCredentials.length} QR credential${createdCredentials.length === 1 ? '' : 's'}`,
+        targetType: 'qrCredentialBatch',
+        details: {
+          count: createdCredentials.length,
+          skippedCount: skippedCredentials.length,
+          codes: createdCredentials.map((item) => item.code),
+        },
+      }),
+    )
+  }
+
+  if (createdCredentials.length) {
+    await batch.commit()
+  }
+
+  return {
+    count: createdCredentials.length,
+    skippedCount: skippedCredentials.length,
+    credentials: createdCredentials,
+    skipped: skippedCredentials,
+  }
+})
+
+export const deleteQrCredential = onCall(callableOptions, async (request) => {
+  const authContext = ensureAdmin(request)
+  const eventId = normalizeEventId(request.data?.eventId)
+  const qrCode = normalizeScannedQrCode(request.data?.qrInput || request.data?.code)
+
+  await db.runTransaction(async (transaction) => {
+    const credentialRef = getQrCredentialRef(eventId, qrCode)
+    const credentialSnapshot = await transaction.get(credentialRef)
+
+    if (!credentialSnapshot.exists) {
+      throw new HttpsError('not-found', 'QR credential was not found.')
+    }
+
+    const credential = normalizeQrCredentialSnapshot(credentialSnapshot)
+
+    if (credential.status === QR_STATUSES.assigned || credential.assignedPersonaId) {
+      throw new HttpsError('failed-precondition', 'Assigned QR credentials cannot be deleted. Revoke them first.')
+    }
+
+    transaction.delete(credentialRef)
+    transaction.set(
+      createAuditLogRef(eventId),
+      buildAuditLogRecord({
+        type: AUDIT_TYPES.qrRevocation,
+        actorUid: authContext.uid,
+        summary: `Deleted QR credential ${qrCode}`,
+        targetType: 'qrCredential',
+        targetId: qrCode,
+        details: {
+          code: qrCode,
+          previousStatus: credential.status,
+        },
+      }),
+    )
+  })
+
+  return { code: qrCode, deleted: true }
 })
 
 export const assignQrCredentialToPersona = onCall(async (request) => {
@@ -1131,17 +1412,17 @@ export const joinEventByShibboleth = onCall(callableOptions, async (request) => 
       .filter((person) => person.recordStatus !== 'deleted')
 
     if (matchingPeople.length === 0) {
-      throw new HttpsError('not-found', 'No persona with this shibboleth exists in the active event. Find an organizer.')
+      throw new HttpsError('not-found', 'Ilyen shibboleth-tel nem található személy az eseményen, keress egy animátort.')
     }
 
     if (matchingPeople.length > 1) {
-      throw new HttpsError('failed-precondition', 'More than one persona uses this shibboleth. Find an organizer.')
+      throw new HttpsError('failed-precondition', 'Több mint egy személy van rendelve ehhez a shibboleth-hez, keress egy animátort.')
     }
 
     const person = matchingPeople[0]
 
     if (person.linkedAuthUid && person.linkedAuthUid !== authContext.uid) {
-      throw new HttpsError('failed-precondition', 'This persona is already linked to another account. Find an organizer.')
+      throw new HttpsError('failed-precondition', 'Ehhez a shibboleth-hez már van fiók kötve, keress egy animátort.')
     }
 
     // ── Carryover balance application ────────────────────────────────────

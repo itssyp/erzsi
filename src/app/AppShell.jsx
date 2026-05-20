@@ -4,15 +4,25 @@ import { signOutUser } from '../features/auth/authService'
 import { useAuth } from '../features/auth/useAuth'
 import { useActiveEvent } from '../features/events/useActiveEvent'
 import { usePosSession } from '../features/pos/usePosSession'
-import { isStaffLike } from '../lib/roles'
+import { ROLES, canManageCatalog, canUseTopup, isStaffLike } from '../lib/roles'
 
 const LOGO_SRC = '/kasszas_erzsi_nobg.png'
+const ENV_LABEL = import.meta.env.VITE_APP_ENV_LABEL || ''
+
+const ROLE_LABELS = {
+  [ROLES.admin]: 'Admin',
+  [ROLES.staff]: 'Büfés',
+  [ROLES.posStaff]: 'Beugrós',
+  [ROLES.topupStaff]: 'Paku',
+  [ROLES.user]: 'Vendég',
+}
 
 const PAGE_TITLES = {
   '/app': 'Saját irányítópult',
   '/staff': 'Pult',
   '/staff/kitchen': 'Konyha',
   '/catalog': 'Katalógus',
+  '/topup': 'Feltöltés',
   '/admin': 'Admin',
 }
 
@@ -78,9 +88,16 @@ export function AppShell() {
     if (isStaffLike(role)) {
       links.push({ to: '/staff', label: 'Pult' })
       links.push({ to: '/staff/kitchen', label: 'Konyha' })
+    }
+    if (canManageCatalog(role)) {
       links.push({ to: '/catalog', label: 'Katalógus' })
     }
-    if (role === 'admin') links.push({ to: '/admin', label: 'Admin' })
+    if (canUseTopup(role)) {
+      links.push({ to: '/topup', label: 'Feltöltés' })
+    }
+    if (role === ROLES.admin) {
+      links.push({ to: '/admin', label: 'Admin' })
+    }
     return links
   }, [role])
 
@@ -200,6 +217,7 @@ export function AppShell() {
               <span className="app-header-title">{pageTitle}</span>
             </>
           )}
+          {ENV_LABEL ? <span className="app-demo-badge">DEMO</span> : null}
           <span className="app-header-spacer" />
           <span className={`event-badge${!eventLabel ? ' no-event' : ''}`}>
             {eventLabel || 'Nincs aktív esemény'}
@@ -261,7 +279,7 @@ export function AppShell() {
             <div className="sidebar-user-avatar">{avatarInitial}</div>
             <div className="sidebar-user-info">
               <div className="sidebar-user-name">{signedInLabel}</div>
-              <div className="sidebar-user-role">{role}</div>
+              <div className="sidebar-user-role">{ROLE_LABELS[role] || role}</div>
             </div>
           </div>
           <button

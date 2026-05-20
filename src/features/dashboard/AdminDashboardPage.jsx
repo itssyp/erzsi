@@ -130,7 +130,7 @@ export function AdminDashboardPage() {
     {
       id: 'registered-users',
       label: 'Felhasználók',
-      component: <RegisteredUsersPanel />,
+      component: <RegisteredUsersPanel eventId={activeEventId} />,
     },
     {
       id: 'drs',

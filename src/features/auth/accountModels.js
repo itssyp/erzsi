@@ -14,7 +14,7 @@ export const ACCOUNT_STATUSES = {
  * @property {string} displayName
  * @property {string} shibboleth
  * @property {string} normalizedShibboleth
- * @property {'user' | 'staff' | 'admin'} role
+ * @property {'user' | 'staff' | 'pos_staff' | 'topup_staff' | 'admin'} role
  * @property {'active' | 'disabled'} status
  * @property {unknown} createdAt
  * @property {unknown} updatedAt

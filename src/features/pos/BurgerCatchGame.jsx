@@ -13,10 +13,20 @@ const SPRITE_KEYWORDS_BURGER = [
   { kind: 'mayo',    keywords: ['majonez', 'majonéz', 'mayo', 'majonaise'] },
 ]
 
+const SPRITE_KEYWORDS_PIZZA = [
+  { kind: 'pizzasauce', keywords: ['paradicsomszosz', 'paradicsomszósz', 'pizza szosz', 'alap szosz', 'szosz', 'szósz', 'sauce'] },
+  { kind: 'mozzarella', keywords: ['mozzarella', 'sajt', 'cheese'] },
+  { kind: 'pepperoni',  keywords: ['pepperoni', 'szalami', 'szalámi'] },
+  { kind: 'ham',        keywords: ['sonka', 'ham'] },
+  { kind: 'mushroom',   keywords: ['gomba', 'mushroom'] },
+  { kind: 'corn',       keywords: ['kukorica', 'corn'] },
+]
+
 const SPRITE_KEYWORDS_GYROS = [
   { kind: 'gyrosmeat', keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
   { kind: 'yogurt',    keywords: ['joghurt', 'joghurtos'] },
   { kind: 'spicy',     keywords: ['csipos', 'csípős', 'csipős', 'spicy', 'eros', 'erős'] },
+  { kind: 'cucumber',  keywords: ['uborka', 'uborkás', 'cucumber'] },
   { kind: 'onion',     keywords: ['hagyma', 'onion'] },
   { kind: 'lettuce',   keywords: ['salata', 'saláta', 'lettuce'] },
   { kind: 'tomato',    keywords: ['paradicsom', 'tomato'] },
@@ -27,7 +37,9 @@ function normalizeLabel(label) {
   return String(label || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 }
 function getSpriteKind(label, variant = 'burger') {
-  const table = variant === 'gyros' ? SPRITE_KEYWORDS_GYROS : SPRITE_KEYWORDS_BURGER
+  const table = variant === 'gyros' ? SPRITE_KEYWORDS_GYROS
+    : variant === 'pizza' ? SPRITE_KEYWORDS_PIZZA
+    : SPRITE_KEYWORDS_BURGER
   const n = normalizeLabel(label)
   return table.find((e) => e.keywords.some((k) => n.includes(normalizeLabel(k))))?.kind || 'default'
 }
@@ -43,6 +55,7 @@ const SPEED_JITTER = 5     // max extra % per second
 // ── Component ─────────────────────────────────────────────────────────────
 export function BurgerCatchGame({ product, template, variant = 'burger', onComplete, onCancel }) {
   const isGyros = variant === 'gyros'
+  const isPizza = variant === 'pizza'
   // Default included ingredients
   const ingredients = useMemo(
     () => template?.defaultIncludedIngredients || [],
@@ -280,7 +293,7 @@ export function BurgerCatchGame({ product, template, variant = 'burger', onCompl
         spawnIngredient()
         lastSpawnRef.current = now
       }
-      if (now - lastTopBunRef.current >= TOP_BUN_MS) {
+      if (!isPizza && now - lastTopBunRef.current >= TOP_BUN_MS) {
         spawnTopBun()
         lastTopBunRef.current = now
       }
@@ -401,7 +414,7 @@ export function BurgerCatchGame({ product, template, variant = 'burger', onCompl
       fallingRef.current = []
       if (layer) layer.innerHTML = ''
     }
-  }, [phase, ingredients, optionalExtras, isGyros])
+  }, [phase, ingredients, optionalExtras, isGyros, isPizza])
 
   // ── Complete → fire onComplete after a brief celebration ──────────────
   useEffect(() => {
@@ -428,7 +441,7 @@ export function BurgerCatchGame({ product, template, variant = 'burger', onCompl
   const totalCount  = ingredients.length
 
   return (
-    <div className="game-overlay" role="dialog" aria-modal="true" aria-label={isGyros ? 'Gyros összerakós játék' : 'Burger összerakós játék'}>
+    <div className="game-overlay" role="dialog" aria-modal="true" aria-label={isPizza ? 'Pizza összerakós játék' : isGyros ? 'Gyros összerakós játék' : 'Burger összerakós játék'}>
       {/* Header */}
       <div className="game-header">
         <button type="button" className="game-cancel-btn" onClick={onCancel}>
@@ -472,7 +485,7 @@ export function BurgerCatchGame({ product, template, variant = 'burger', onCompl
               {countdown === 0 ? 'GO!' : countdown}
             </span>
             <p className="game-countdown-hint">
-              {product.name} — csípd el az összetevőket, majd {isGyros ? 'a tortilla csavarja be a gyrost!' : 'a felső buci zárja le a burgert!'}
+              {product.name} — csípd el az összetevőket, majd {isPizza ? 'nyomd meg a Kész gombot amikor a pizza tele van!' : isGyros ? 'a tortilla csavarja be a gyrost!' : 'a felső buci zárja le a burgert!'}
             </p>
           </div>
         ) : null}
@@ -481,35 +494,50 @@ export function BurgerCatchGame({ product, template, variant = 'burger', onCompl
         {complete ? (
           <div className="game-celebrate">
             <span className="game-celebrate-icon">🎉</span>
-            <span className="game-celebrate-text">{isGyros ? 'Gyros kész!' : 'Burger kész!'}</span>
+            <span className="game-celebrate-text">{isPizza ? 'Pizza kész!' : isGyros ? 'Gyros kész!' : 'Burger kész!'}</span>
           </div>
         ) : null}
 
-        {/* Paddle — bottom bun + burger tower stacked on top */}
+        {/* Paddle */}
         <div ref={paddleRef} className="game-paddle" style={{ left: '50%' }}>
-          {/* Tower grows upward: top bun (if caught) → ingredients → bottom bun */}
-          <div className={isGyros ? 'game-gyros-tower' : 'game-burger-tower'}>
-            {topBunCaught ? (
-              isGyros ? (
-                <div className="gyros-wrap gyros-wrap--top game-tower-top-tortilla" aria-hidden="true" />
-              ) : (
-                <div className="burger-bun burger-bun--top game-tower-top-bun" aria-hidden="true">
-                  <span />
-                </div>
-              )
-            ) : null}
-            {caughtStack.map((entry) => (
-              <div
-                key={entry.uid}
-                // Inline styles override height:100%/display:grid from .burger-layer
-                className={`burger-layer burger-layer--${entry.spriteKind} game-caught-layer`}
-                style={{ display: 'block', height: 'auto', width: '100%' }}
-              >
-                <span className="burger-layer-sprite" style={{ display: 'block', width: '100%' }} />
+          {isPizza ? (
+            /* Pizza disc — circular pad that fills up with toppings */
+            <div className="game-pizza-disc">
+              <div className="game-pizza-disc-sauce" />
+              {caughtStack.map((entry, i) => (
+                <div
+                  key={entry.uid}
+                  className={`game-pizza-topping game-pizza-topping--${entry.spriteKind}`}
+                  style={{ '--ti': i }}
+                />
+              ))}
+            </div>
+          ) : (
+            <>
+              {/* Tower grows upward: top bun (if caught) → ingredients → bottom bun */}
+              <div className={isGyros ? 'game-gyros-tower' : 'game-burger-tower'}>
+                {topBunCaught ? (
+                  isGyros ? (
+                    <div className="gyros-wrap gyros-wrap--top game-tower-top-tortilla" aria-hidden="true" />
+                  ) : (
+                    <div className="burger-bun burger-bun--top game-tower-top-bun" aria-hidden="true">
+                      <span />
+                    </div>
+                  )
+                ) : null}
+                {caughtStack.map((entry) => (
+                  <div
+                    key={entry.uid}
+                    className={`burger-layer burger-layer--${entry.spriteKind} game-caught-layer`}
+                    style={{ display: 'block', height: 'auto', width: '100%' }}
+                  >
+                    <span className="burger-layer-sprite" style={{ display: 'block', width: '100%' }} />
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className={isGyros ? 'game-tortilla-bottom' : 'game-bun-bottom'} />
+              <div className={isGyros ? 'game-tortilla-bottom' : 'game-bun-bottom'} />
+            </>
+          )}
         </div>
       </div>
     </div>

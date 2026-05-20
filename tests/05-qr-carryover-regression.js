@@ -446,6 +446,13 @@ posScanner.flush()
 assertEqual(posResolved.length, 1, 'POS global scanner resolves without searchbar focus')
 assertEqual(posResolved[0], '8442', 'POS global scanner resolves 4-digit code')
 
+const barcodeLikeResolved = []
+const barcodeLikeScanner = createScannerBuffer({ onResolved: (value) => barcodeLikeResolved.push(value) })
+;'8442612345678'.split('').forEach((key, index) => barcodeLikeScanner.key({ key, now: 1200 + index * 6 }))
+barcodeLikeScanner.key({ key: 'Enter', now: 1300 })
+assertEqual(barcodeLikeResolved.length, 1, 'Scanner waits for the complete product barcode before resolving')
+assertEqual(barcodeLikeResolved[0], '8442612345678', 'Product barcode is not truncated to the first 4 QR digits')
+
 const topupResolved = []
 const topupScanner = createScannerBuffer({ onResolved: (value) => topupResolved.push(normalizeQrInput(value)) })
 ;'5566'.split('').forEach((key, index) => topupScanner.key({ key, now: 2000 + index * 7 }))

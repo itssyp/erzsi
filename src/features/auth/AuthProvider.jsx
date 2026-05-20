@@ -1,7 +1,7 @@
 import { createContext, useEffect, useState } from 'react'
 import { onAuthStateChanged } from 'firebase/auth'
 import { auth } from '../../lib/firebase'
-import { ROLES, getRoleFromClaims, isStaffLike } from '../../lib/roles'
+import { PRIVILEGED_ROLES, ROLES, getRoleFromClaims, isStaffLike } from '../../lib/roles'
 import { bootstrapPrivilegedSession, getSessionClaims } from './authService'
 import { ensureAccountDocument, subscribeToAccount } from './accountService'
 
@@ -17,7 +17,7 @@ const initialState = {
 }
 
 function shouldRefreshPrivilegedClaims(accountRole, claimsRole) {
-  const wantsPrivilegedRole = accountRole === ROLES.admin || accountRole === ROLES.staff
+  const wantsPrivilegedRole = PRIVILEGED_ROLES.includes(accountRole)
 
   return wantsPrivilegedRole && accountRole !== claimsRole
 }

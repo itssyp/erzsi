@@ -183,6 +183,7 @@ h1, h2, h3, h4, h5, h6 {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
+  position: relative;
   padding: 0 16px;
   gap: 12px;
   z-index: 1000;
@@ -216,6 +217,30 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 600;
   font-size: 0.875rem;
   color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.app-demo-badge {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 50%;
+  translate: 0 -50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 12px;
+  border-radius: var(--radius-pill);
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -1200,6 +1225,23 @@ textarea:disabled {
 .record-list {
   display: flex;
   flex-direction: column;
+}
+
+.personas-list-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.personas-scroll-list {
+  flex: 1 1 auto;
+  min-height: 160px;
+  max-height: min(58vh, 640px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .personas-search-field {
@@ -3611,6 +3653,10 @@ textarea:disabled {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.admin-section > .catalog-mode-tabs:first-of-type {
+  margin-top: 0;
+}
+
 .catalog-mode-tab {
   display: inline-flex;
   align-items: center;
@@ -3695,6 +3741,14 @@ textarea:disabled {
   display: grid;
   grid-template-columns: minmax(min(100%, 280px), 340px) minmax(0, 1fr);
   gap: 14px;
+  align-items: start;
+  min-width: 0;
+}
+
+.topup-page-grid {
+  display: grid;
+  grid-template-columns: minmax(min(100%, 360px), 440px) minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
   min-width: 0;
 }
@@ -4061,6 +4115,14 @@ textarea:disabled {
   .catalog-builder-row-heading {
     display: none;
   }
+
+  .catalog-barcode-capture-row {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-barcode-capture-row .secondary-button {
+    width: 100%;
+  }
 }
 
 /* ── Catalog visual enhancements ── */
@@ -4395,16 +4457,23 @@ textarea:disabled {
 /* ── Gyros stage ─────────────────────────────────────────────────────────── */
 .gyros-stage {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* Two rows: ingredient stack (stretches) + bottom tortilla (natural height) */
+  grid-template-rows: minmax(0, 1fr) auto;
   justify-items: center;
   align-items: center;
-  gap: clamp(2px, 0.8vh, 6px);
+  gap: clamp(4px, 1vh, 10px);
   min-height: 0;
   height: 100%;
   padding: clamp(10px, 2vh, 16px) 14px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* Space the ingredient layers out evenly inside the gyros builder */
+.gyros-stage .burger-stack {
+  gap: clamp(8px, 2vh, 18px);
+  align-content: space-evenly;
 }
 
 /* Tortilla wrap sprites — shared base */
@@ -4512,6 +4581,85 @@ textarea:disabled {
     radial-gradient(ellipse 4% 2.4% at 58% 31%, rgba(255, 247, 237, 0.82) 0 95%, transparent 100%),
     radial-gradient(ellipse 4% 2.4% at 73% 20%, rgba(255, 247, 237, 0.88) 0 95%, transparent 100%),
     linear-gradient(180deg, #f6c46a 0%, #d9902f 100%);
+}
+
+.catalog-barcode-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: #ecfeff;
+  color: #0e7490;
+  border: 1px solid #a5f3fc;
+  white-space: nowrap;
+}
+
+.catalog-barcode-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.catalog-barcode-capture-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.catalog-barcode-capture-row input {
+  min-width: 0;
+}
+
+.catalog-barcode-capture-row .secondary-button.active {
+  border-color: #0e7490;
+  background: #ecfeff;
+  color: #0e7490;
+}
+
+.catalog-barcode-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.catalog-barcode-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 5px 8px 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid #a5f3fc;
+  background: #ecfeff;
+  color: #155e75;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.catalog-barcode-token span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.catalog-barcode-token strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(14, 116, 144, 0.12);
+  color: #0e7490;
+  font-size: 0.72rem;
+  line-height: 1;
 }
 
 .product-warning-triangle {
@@ -4753,6 +4901,23 @@ textarea:disabled {
   background: rgba(245, 208, 254, 0.65);
 }
 
+.burger-layer--cucumber .burger-layer-sprite {
+  height: clamp(12px, 3vh, 18px);
+  width: 76%;
+  /* Oval slice shape */
+  border-radius: 50% / 42%;
+  /* Dark green skin ring, pale green flesh inside */
+  background:
+    /* Seed detail: small pale dots in the centre */
+    radial-gradient(ellipse 6px 4px at 30% 50%, rgba(220,252,231,0.70) 0%, transparent 100%),
+    radial-gradient(ellipse 6px 4px at 50% 50%, rgba(220,252,231,0.70) 0%, transparent 100%),
+    radial-gradient(ellipse 6px 4px at 70% 50%, rgba(220,252,231,0.70) 0%, transparent 100%),
+    /* Flesh gradient: pale centre → mid-green → dark skin edge */
+    radial-gradient(ellipse 85% 85% at 50% 50%, #bbf7d0 0%, #4ade80 55%, #16a34a 100%);
+  border: 2px solid #15803d;
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,0.10), 0 1px 4px rgba(22,163,74,0.25);
+}
+
 .burger-layer--bacon .burger-layer-sprite {
   height: clamp(15px, 3.5vh, 22px);
   width: 74%;
@@ -4890,47 +5055,149 @@ textarea:disabled {
     -32px   4px 0 -2px #fffbf2;
 }
 
-/* ── Yogurt drizzle ─────────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════════════
+   PIZZA
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Pizza builder layout ────────────────────────────────────────────────── */
+.pizza-customizer {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  height: 100%;
+  gap: 22px;
+}
+
+/* Stage takes all remaining horizontal space; the pizza-visual sizes itself
+   to the largest square that fits via container query units (cqw / cqh).   */
+.pizza-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  container-type: size;
+}
+
+.pizza-chip-panel {
+  flex-shrink: 0;
+  width: 260px;
+  overflow-y: auto;
+}
+
+.pizza-visual {
+  position: relative;
+  /* min(container width, container height) → largest square that fits */
+  width:  min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+  background-image: url('/sprites/pizzabase.png');
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Toppings are inset from the edge so the base (pizzabase) reads as the     */
+/* dominant visual — toppings sit inside the dough/crust ring.               */
+.pizza-topping {
+  position: absolute;
+  inset: 7%;
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  transition: opacity 0.20s ease;
+}
+.pizza-topping.is-removed { opacity: 0.07; }
+
+/* Sauce sits well inside the crust ring */
+.pizza-topping--pizzasauce { background-image: url('/sprites/pizzasauce.png'); inset: 10%; }
+.pizza-topping--mozzarella { background-image: url('/sprites/cheese.png'); inset: -15%; }
+/* Discrete toppings render larger so they read clearly through the cheese */
+.pizza-topping--pepperoni  { background-image: url('/sprites/pepperoni.png'); inset: -10%; }
+.pizza-topping--ham        { background-image: url('/sprites/ham.png');       inset: -8%; }
+.pizza-topping--mushroom   { background-image: url('/sprites/mushrooms.png'); inset: -7%; }
+.pizza-topping--corn       { background-image: url('/sprites/corn.png');      inset: -7%; }
+
+/* Nudge cheese + discrete toppings a couple of pixels toward the top-right */
+/* (sauce + base stay in place so the crust/sauce alignment is unchanged).  */
+.pizza-topping--mozzarella,
+.pizza-topping--pepperoni,
+.pizza-topping--ham,
+.pizza-topping--mushroom,
+.pizza-topping--corn {
+  transform: translate(5px, -5px);
+}
+
+/* ── Pizza ingredient sprites (falling items in catch game) ──────────────── */
+/* Image-based: use custom sprites, let .catch-item drop-shadow handle depth */
+.burger-layer--pizzasauce .burger-layer-sprite,
+.burger-layer--mozzarella .burger-layer-sprite,
+.burger-layer--pepperoni  .burger-layer-sprite,
+.burger-layer--ham        .burger-layer-sprite,
+.burger-layer--mushroom   .burger-layer-sprite,
+.burger-layer--corn       .burger-layer-sprite {
+  height: clamp(48px, 10vh, 68px);
+  width: 100%;
+  background-color: transparent;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+.burger-layer--pizzasauce .burger-layer-sprite { background-image: url('/sprites/pizzasauce.png'); }
+.burger-layer--mozzarella .burger-layer-sprite { background-image: url('/sprites/cheese.png'); }
+.burger-layer--pepperoni  .burger-layer-sprite { background-image: url('/sprites/pepperoni.png'); }
+.burger-layer--ham        .burger-layer-sprite { background-image: url('/sprites/ham.png'); }
+.burger-layer--mushroom   .burger-layer-sprite { background-image: url('/sprites/mushrooms.png'); }
+.burger-layer--corn       .burger-layer-sprite { background-image: url('/sprites/corn.png'); }
+
+/* ── Yogurt sauce splatter (white — same pattern as ketchup) ────────────── */
+/* drop-shadow on the layer makes the white blob + droplets visible on      */
+/* the white modal background without needing a coloured outline.           */
+.burger-layer--yogurt {
+  overflow: visible;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.20));
+}
 .burger-layer--yogurt .burger-layer-sprite {
   position: relative;
   overflow: visible;
-  height: 5px;
-  width: 65%;
-  border-radius: 999px;
-  background: rgba(255, 253, 235, 0.92);
-  border: 1px solid rgba(200, 170, 80, 0.18);
-  transform: rotate(-6deg);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  height: clamp(10px, 2.6vh, 16px);
+  width: 84%;
+  border-radius: 12% 68% 58% 16% / 48% 55% 45% 52%;
+  background: #fffdf5;
+  box-shadow: inset 0 -3px 0 rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.08);
 }
-/* Second drizzle stroke */
 .burger-layer--yogurt .burger-layer-sprite::before {
   content: '';
   position: absolute;
-  width: 80%;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 253, 235, 0.88);
-  border: 1px solid rgba(200, 170, 80, 0.12);
-  top: 7px;
-  left: 10%;
-  transform: rotate(10deg);
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: #fffdf5;
+  top: -9px; right: 22%;
+  box-shadow:
+     12px   2px 0  0px #fffdf5,
+     22px  -5px 0 -1px #fffdf5,
+     32px  -1px 0 -1px #fff8ee,
+      7px -13px 0 -2px #fffdf5,
+     18px -11px 0 -2px #ffffff,
+     38px  -7px 0 -2px #fffdf5;
 }
-/* Third drizzle stroke + drip dots */
 .burger-layer--yogurt .burger-layer-sprite::after {
   content: '';
   position: absolute;
-  width: 4px;
-  height: 4px;
+  width: 5px; height: 5px;
   border-radius: 50%;
-  background: rgba(255, 253, 235, 0.9);
-  top: 14px;
-  left: 30%;
+  background: #fffdf5;
+  bottom: -8px; left: 16%;
   box-shadow:
-    10px  2px 0  0px rgba(255,253,235,0.85),
-    22px -1px 0 -1px rgba(255,253,235,0.80),
-    35px  3px 0 -1px rgba(255,253,235,0.75),
-    -8px  5px 0 -1px rgba(255,253,235,0.80),
-    48px  0px 0 -2px rgba(255,253,235,0.70);
+    -11px   3px 0 -1px #fffdf5,
+    -21px   5px 0 -1px #ffffff,
+    -30px   2px 0 -2px #fffdf5,
+      8px   7px 0 -1px #fffdf5,
+    -15px  10px 0 -2px #fff8ee,
+    -38px   4px 0 -2px #fffdf5;
 }
 
 /* ── Spicy sauce splatter (orange-red) ──────────────────────────────────── */
@@ -5498,6 +5765,10 @@ textarea:disabled {
     grid-template-columns: 1fr;
   }
 
+  .topup-page-grid {
+    grid-template-columns: 1fr;
+  }
+
   .catalog-preview-strip,
   .catalog-hint-grid {
     grid-template-columns: 1fr;
@@ -5636,25 +5907,58 @@ textarea:disabled {
     min-height: 42px;
   }
 
+  /* Mobile POS: stack basket + products vertically and let the page scroll
+     naturally. All internal flex/overflow constraints from the desktop layout
+     are dropped so nothing pins itself to the viewport. */
   .pos-screen-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
+    overflow-x: hidden;
     overflow-y: auto;
-    height: auto;
+    height: 100%;
+    max-width: 100%;
+    -webkit-overflow-scrolling: touch;
   }
 
-  .pos-basket-area {
+  .pos-basket-area,
+  .pos-products-area {
     grid-column: 1;
+    overflow: visible;
+    min-height: auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* Long product names / customisation labels must be allowed to shrink
+     and ellipsis instead of widening the basket past the viewport. */
+  .receipt-line,
+  .receipt-line-group {
+    min-width: 0;
+  }
+
+  .receipt-item-name {
+    min-width: 0;
+    flex: 0 1 auto;
+  }
+
+  .basket-mod {
+    max-width: 100%;
+  }
+
+  /* Receipt: drop the internal scroll container so the whole basket flows
+     into the page rather than being a stuck mini-scrollbox. */
+  .receipt-container {
+    flex: initial;
+    overflow: visible;
+  }
+
+  .receipt-body {
+    flex: initial;
     overflow: visible;
     min-height: auto;
   }
 
-  .pos-products-area {
-    grid-column: 1;
-    overflow-y: visible;
-    min-height: auto;
-  }
-
+  /* Products: same idea — no inner scroll, no flex stretch. */
   .product-grid-scroll {
     flex: initial;
     min-height: auto;
@@ -6527,7 +6831,14 @@ textarea:disabled {
 .game-pdot--mayo.caught    { background: #fef3c7; border-color: #d1b063; }
 .game-pdot--yogurt.caught    { background: #fefce8; border-color: #ca8a04; }
 .game-pdot--spicy.caught     { background: #f97316; border-color: #ea580c; }
-.game-pdot--gyrosmeat.caught { background: #9a5028; border-color: #7c3a1a; }
+.game-pdot--gyrosmeat.caught  { background: #9a5028; border-color: #7c3a1a; }
+.game-pdot--cucumber.caught   { background: #4ade80; border-color: #16a34a; }
+.game-pdot--pizzasauce.caught { background: #dc2626; border-color: #991b1b; }
+.game-pdot--mozzarella.caught { background: #fef9ec; border-color: #c8a840; }
+.game-pdot--pepperoni.caught  { background: #991b1b; border-color: #7f1d1d; }
+.game-pdot--ham.caught        { background: #fb7185; border-color: #e11d48; }
+.game-pdot--mushroom.caught   { background: #92400e; border-color: #78350f; }
+.game-pdot--corn.caught       { background: #fbbf24; border-color: #d97706; }
 
 .game-score {
   font-size: 0.88rem;
@@ -6722,6 +7033,47 @@ textarea:disabled {
   border: 1.5px solid #c09030;
   box-shadow: 0 -2px 5px rgba(0,0,0,0.25);
 }
+
+/* ── Pizza catch game elements ──────────────────────────────────────────── */
+/* The paddle for pizza is a top-down pizza disc that fills up with toppings */
+.game-pizza-disc {
+  position: relative;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  /* Crust */
+  background: radial-gradient(circle at 50% 50%,
+    #f5d078 0%, #e8b840 74%, #d09020 84%, #b07010 91%, #906010 100%
+  );
+  border: 2px solid #a07020;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.65), inset 0 2px 6px rgba(255,230,120,0.20);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+/* Red sauce inside the game disc */
+.game-pizza-disc-sauce {
+  position: absolute;
+  inset: 9%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #ef4444 0%, #dc2626 50%, #991b1b 100%);
+}
+/* Individual caught topping dots — Fibonacci spiral placement via --ti */
+.game-pizza-topping {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  transform:
+    translate(-50%, -50%)
+    rotate(calc(var(--ti, 0) * 137.5deg))
+    translateY(calc(-1 * (7px + var(--ti, 0) * 2.2px)));
+}
+.game-pizza-topping--pizzasauce { background: #dc2626; width: 13px; height: 13px; border-radius: 38% 62% 52% 48%; }
+.game-pizza-topping--mozzarella { background: #fef9ec; border: 1px solid rgba(180,150,50,0.28); }
+.game-pizza-topping--pepperoni  { background: #991b1b; }
+.game-pizza-topping--ham        { background: #e11d48; }
+.game-pizza-topping--mushroom   { background: #78350f; }
+.game-pizza-topping--corn       { background: #d97706; }
 
 /* Paddle — flex-column so the burger tower stacks upward from the bun */
 .game-paddle {

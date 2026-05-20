@@ -1,5 +1,6 @@
 import { serverTimestamp } from 'firebase/firestore'
 import { normalizeSearchText } from '../../lib/normalize'
+import { sanitizeProductBarcodes } from './productBarcodes'
 
 export const PRODUCT_CATEGORIES = [
   'Sör',
@@ -8,6 +9,7 @@ export const PRODUCT_CATEGORIES = [
   'Üditő',
   'Nasi',
   'Kaja',
+  'Egyéb',
 ]
 
 const LEGACY_PRODUCT_CATEGORY_MAP = {
@@ -49,6 +51,7 @@ export function buildProductRecord({
   isTemporarilyUnavailable,
   modifierTemplateId,
   isDRS,
+  barcodes,
   actorUid,
 }) {
   return {
@@ -60,6 +63,7 @@ export function buildProductRecord({
     isTemporarilyUnavailable,
     modifierTemplateId: modifierTemplateId || null,
     isDRS: isDRS || false,
+    barcodes: sanitizeProductBarcodes(barcodes || []),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     updatedBy: actorUid,
@@ -74,6 +78,7 @@ export function buildProductPatch({
   isTemporarilyUnavailable,
   modifierTemplateId,
   isDRS,
+  barcodes,
   actorUid,
 }) {
   return {
@@ -85,6 +90,7 @@ export function buildProductPatch({
     isTemporarilyUnavailable,
     modifierTemplateId: modifierTemplateId || null,
     isDRS: isDRS || false,
+    barcodes: sanitizeProductBarcodes(barcodes || []),
     updatedAt: serverTimestamp(),
     updatedBy: actorUid,
   }

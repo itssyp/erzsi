@@ -10,7 +10,7 @@ import { joinEventByShibboleth } from '../user/userService'
 import { TabShell } from '../../components/TabShell'
 import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
 import { isFoodCategory } from '../products/productModels'
-import { getPersonDisplayId } from '../people/personModels'
+import { getAttendeeTypeLabel, getPersonDisplayId } from '../people/personModels'
 import { QrSelfAssignOverlay } from '../qr/QrSelfAssignOverlay'
 
 const FOOD_STATUS_STEPS = [
@@ -135,7 +135,7 @@ export function UserDashboardPage() {
             <ul className="detail-list">
               <li><strong>Név</strong> <span>{person.displayName}</span></li>
               <li><strong>Csapat</strong> <span>{person.team || '-'}</span></li>
-              <li><strong>Típus</strong> <span style={{ textTransform: 'capitalize' }}>{person.attendeeType}</span></li>
+              <li><strong>Típus</strong> <span>{getAttendeeTypeLabel(person.attendeeType)}</span></li>
               <li><strong>Shibboleth</strong> <span>{person.shibboleth || '-'}</span></li>
               <li><strong>Esemény</strong> <span>{activeEvent?.name || activeEventId}</span></li>
             </ul>
@@ -163,7 +163,7 @@ export function UserDashboardPage() {
                     className="primary-button user-qr-claim-btn"
                     onClick={() => setShowQrAssign(true)}
                   >
-                    QR-kód igénylése
+                    QR-kód beolvasása
                   </button>
                 </div>
               </section>

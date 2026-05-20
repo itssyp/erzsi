@@ -4,9 +4,10 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
-  orderBy,
   query,
+  serverTimestamp,
   setDoc,
+  where,
   writeBatch,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
@@ -23,7 +24,9 @@ import { createAuditLogWrite } from '../audit/auditService'
 import { AUDIT_TYPES } from '../audit/auditModels'
 import { buildModifierTemplateRecord } from '../modifiers/modifierTemplateModels'
 import { buildProductRecord } from '../products/productModels'
+import { sanitizeProductBarcodes } from '../products/productBarcodes'
 import {
+  EVENT_STATUSES,
   buildEventActivationPatch,
   buildEventRecord,
   buildKitchenStatusPatch,
@@ -46,9 +49,18 @@ export function subscribeToRuntime(onNext, onError) {
 
 export function subscribeToEventsList(onNext, onError) {
   return onSnapshot(
-    query(collection(db, EVENTS_COLLECTION), orderBy('createdAt', 'desc')),
+    collection(db, EVENTS_COLLECTION),
     (snapshot) => {
-      onNext(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })))
+      const events = snapshot.docs
+        .map((item) => ({ id: item.id, ...item.data() }))
+        .sort((left, right) => {
+          const rightTime = right.createdAt?.toMillis?.() || right.updatedAt?.toMillis?.() || 0
+          const leftTime = left.createdAt?.toMillis?.() || left.updatedAt?.toMillis?.() || 0
+
+          return rightTime - leftTime
+        })
+
+      onNext(events)
     },
     onError,
   )
@@ -82,6 +94,7 @@ async function cloneCatalogFromSourceEvent({
 
   productSnapshot.docs.forEach((item) => {
     const product = item.data()
+    const barcodes = sanitizeProductBarcodes(product.barcodes || [])
 
     batch.set(
       doc(db, getEventScopedPath(targetEventId, EVENT_SUBCOLLECTIONS.products, item.id)),
@@ -93,9 +106,23 @@ async function cloneCatalogFromSourceEvent({
         isTemporarilyUnavailable: Boolean(product.isTemporarilyUnavailable),
         modifierTemplateId: product.modifierTemplateId || null,
         isDRS: Boolean(product.isDRS),
+        barcodes,
         actorUid,
       }),
     )
+
+    barcodes.forEach((barcode) => {
+      batch.set(
+        doc(db, getEventScopedPath(targetEventId, EVENT_SUBCOLLECTIONS.productBarcodes, barcode)),
+        {
+          barcode,
+          productId: item.id,
+          productName: product.name,
+          updatedAt: serverTimestamp(),
+          updatedBy: actorUid,
+        },
+      )
+    })
   })
 
   const auditLogWrite = createAuditLogWrite({
@@ -218,19 +245,54 @@ export async function closeEventAndCarryBalances({ eventId }) {
   return result.data
 }
 
+/**
+ * Ensure the system/runtime document exists and is consistent with the
+ * events collection. Self-heals the common desync where runtime.activeEventId
+ * is null but an event in the collection has status='active' (which happens
+ * when the runtime doc was wiped, when a deploy/seed step ran out of order,
+ * or when an atomic batch was partially synced from an offline client).
+ *
+ * Only auto-recovers when there is exactly ONE unambiguously active event —
+ * if multiple events have status='active', the admin must resolve manually.
+ */
 export async function ensureRuntimeDocument(actorUid) {
   const runtimeRef = doc(db, getSystemRuntimePath())
   const runtimeSnapshot = await getDoc(runtimeRef)
+  const runtimeData = runtimeSnapshot.exists() ? runtimeSnapshot.data() : null
 
-  if (runtimeSnapshot.exists()) {
-    return runtimeSnapshot.data()
+  // Runtime already points to an event — trust it (existing happy path).
+  if (runtimeData?.activeEventId) {
+    return runtimeData
   }
 
-  await setDoc(
-    runtimeRef,
-    buildRuntimeRecord({ activeEventId: null, actorUid }),
-    { merge: true },
+  // Runtime says "no active event". Verify by scanning events for one
+  // that is still flagged active. If exactly one exists, re-link the runtime.
+  const activeEventsSnapshot = await getDocs(
+    query(collection(db, EVENTS_COLLECTION), where('status', '==', EVENT_STATUSES.active)),
   )
+  const activeEvents = activeEventsSnapshot.docs.filter((d) => !d.data().closedAt)
+
+  if (activeEvents.length === 1) {
+    const recoveredEventId = activeEvents[0].id
+    await setDoc(
+      runtimeRef,
+      buildRuntimeRecord({ activeEventId: recoveredEventId, actorUid }),
+      { merge: true },
+    )
+    return { ...(runtimeData || {}), activeEventId: recoveredEventId }
+  }
+
+  // No active event, or ambiguous (multiple) — make sure the doc exists
+  // so subsequent code paths don't blow up, but leave activeEventId null.
+  if (!runtimeData) {
+    await setDoc(
+      runtimeRef,
+      buildRuntimeRecord({ activeEventId: null, actorUid }),
+      { merge: true },
+    )
+  }
+
+  return runtimeData || { activeEventId: null }
 }
 
 export function subscribeToActiveEvent(eventId, onNext, onError) {

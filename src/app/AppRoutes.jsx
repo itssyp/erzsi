@@ -14,6 +14,7 @@ import { CatalogManagementPage } from '../features/dashboard/CatalogManagementPa
 import { NotFoundPage } from '../features/dashboard/NotFoundPage'
 import { QrLandingPage } from '../features/dashboard/QrLandingPage'
 import { StaffDashboardPage } from '../features/dashboard/StaffDashboardPage'
+import { TopupPage } from '../features/dashboard/TopupPage'
 import { UserDashboardPage } from '../features/dashboard/UserDashboardPage'
 
 export function AppRoutes() {
@@ -51,7 +52,7 @@ export function AppRoutes() {
           <Route
             path="staff"
             element={
-              <RequireRole allowedRoles={[ROLES.staff, ROLES.admin]}>
+              <RequireRole allowedRoles={[ROLES.staff, ROLES.posStaff, ROLES.admin]}>
                 <RequireActiveEvent>
                   <StaffDashboardPage mode="sell" />
                 </RequireActiveEvent>
@@ -61,7 +62,7 @@ export function AppRoutes() {
           <Route
             path="staff/kitchen"
             element={
-              <RequireRole allowedRoles={[ROLES.staff, ROLES.admin]}>
+              <RequireRole allowedRoles={[ROLES.staff, ROLES.posStaff, ROLES.admin]}>
                 <RequireActiveEvent>
                   <StaffDashboardPage mode="kitchen" />
                 </RequireActiveEvent>
@@ -74,6 +75,16 @@ export function AppRoutes() {
               <RequireRole allowedRoles={[ROLES.staff, ROLES.admin]}>
                 <RequireActiveEvent>
                   <CatalogManagementPage />
+                </RequireActiveEvent>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="topup"
+            element={
+              <RequireRole allowedRoles={[ROLES.admin, ROLES.topupStaff]}>
+                <RequireActiveEvent>
+                  <TopupPage />
                 </RequireActiveEvent>
               </RequireRole>
             }

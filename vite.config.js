@@ -32,6 +32,14 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
+        // Activate new SW on next page load instead of waiting for all tabs
+        // to close. Prevents stale bundles from masking newly deployed code
+        // (which was hiding the T10V event in the admin events list).
+        skipWaiting: true,
+        clientsClaim: true,
+        // Don't let workbox precache the index page itself — always fetch it
+        // fresh so the <script> tag always points at the newest bundle hash.
+        cleanupOutdatedCaches: true,
       },
     }),
   ],

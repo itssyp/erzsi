@@ -6,6 +6,15 @@ export const ATTENDEE_TYPES = {
   freshman: 'freshman',
 }
 
+export const ATTENDEE_TYPE_LABELS = {
+  [ATTENDEE_TYPES.organizer]: 'Animátor',
+  [ATTENDEE_TYPES.freshman]: 'Gólya',
+}
+
+export function getAttendeeTypeLabel(type) {
+  return ATTENDEE_TYPE_LABELS[type] || type || '-'
+}
+
 export const PERSON_RECORD_STATUSES = {
   active: 'active',
   deleted: 'deleted',

@@ -51,8 +51,39 @@ service cloud.firestore {
     }
 
     function isStaffLike() {
-      return (effectiveRole() == 'staff' || effectiveRole() == 'admin')
+      return (effectiveRole() == 'staff' || effectiveRole() == 'pos_staff' || effectiveRole() == 'admin')
         && accountStatus() != 'disabled';
+    }
+
+    function canUsePos() {
+      return (effectiveRole() == 'admin' || effectiveRole() == 'staff' || effectiveRole() == 'pos_staff')
+        && accountStatus() != 'disabled';
+    }
+
+    function canUseTopup() {
+      return (effectiveRole() == 'admin' || effectiveRole() == 'topup_staff')
+        && accountStatus() != 'disabled';
+    }
+
+    function canManageCatalog() {
+      return (effectiveRole() == 'admin' || effectiveRole() == 'staff')
+        && accountStatus() != 'disabled';
+    }
+
+    function canManagePeople() {
+      return (effectiveRole() == 'admin' || effectiveRole() == 'staff')
+        && accountStatus() != 'disabled';
+    }
+
+    function validPosPersonBalanceUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balance', 'updatedAt'])
+        && request.resource.data.balance is number;
+    }
+
+    function validKitchenEventUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isKitchenClosed', 'updatedBy', 'updatedAt'])
+        && request.resource.data.isKitchenClosed is bool
+        && request.resource.data.updatedBy == request.auth.uid;
     }
 
     function isOwnAccount(uid) {
@@ -89,7 +120,7 @@ service cloud.firestore {
     }
 
     match /accounts/{uid} {
-      allow read: if isOwnAccount(uid) || isStaffLike();
+      allow read: if isOwnAccount(uid) || isStaffLike() || canUseTopup();
       allow create: if isOwnAccount(uid) && validUserAccountCreate(uid);
       allow update: if isAdmin() || validOwnAccountUpdate(uid);
       allow delete: if isAdmin();
@@ -112,42 +143,49 @@ service cloud.firestore {
 
     match /events/{eventId} {
       allow read: if isSignedIn();
-      allow write: if isAdmin();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (canUsePos() && validKitchenEventUpdate());
 
       match /products/{productId} {
         allow read: if isSignedIn();
-        allow write: if isStaffLike();
+        allow write: if canManageCatalog();
+      }
+
+      match /productBarcodes/{barcode} {
+        allow read: if isSignedIn();
+        allow write: if canManageCatalog();
       }
 
       match /modifierTemplates/{templateId} {
         allow read: if isSignedIn();
-        allow write: if isStaffLike();
+        allow write: if canManageCatalog();
       }
 
       match /people/{personId} {
-        allow read: if isStaffLike() || isLinkedUserForPerson(eventId, personId);
-        allow write: if isStaffLike();
+        allow read: if canUsePos() || canUseTopup() || isLinkedUserForPerson(eventId, personId);
+        allow create, delete: if canManagePeople();
+        allow update: if canManagePeople() || (canUsePos() && validPosPersonBalanceUpdate());
       }
 
       match /baskets/{personId} {
-        allow read, write: if isStaffLike();
+        allow read, write: if canUsePos();
       }
 
       match /orders/{orderId} {
-        allow read: if isStaffLike()
+        allow read: if canUsePos()
           || (isLinkedUserForEvent(eventId)
             && resource.data.personId == accountEventLink(eventId).data.personId);
-        allow write: if isStaffLike();
+        allow write: if canUsePos();
       }
 
       match /ledgerEntries/{entryId} {
-        allow read: if isStaffLike();
-        allow write: if isStaffLike();
+        allow read: if canUsePos() || canUseTopup();
+        allow write: if canUsePos();
       }
 
       match /auditLogs/{entryId} {
         allow read: if isAdmin();
-        allow write: if isStaffLike();
+        allow write: if canUsePos();
       }
 
       match /qrAssignments/{qrId} {
@@ -156,7 +194,7 @@ service cloud.firestore {
       }
 
       match /drsReturns/{returnId} {
-        allow read, write: if isStaffLike();
+        allow read, write: if canUsePos();
       }
     }
   }

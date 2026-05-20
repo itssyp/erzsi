@@ -3,7 +3,7 @@ import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
 import { StatusCard } from '../../components/StatusCard'
 import { formatHuf, parseHufInteger } from '../../lib/money'
-import { ATTENDEE_TYPES, PERSON_RECORD_STATUSES, getPersonDisplayId } from '../people/personModels'
+import { ATTENDEE_TYPES, PERSON_RECORD_STATUSES, getAttendeeTypeLabel, getPersonDisplayId } from '../people/personModels'
 import {
   adjustPersonBalance,
   deletePersonRecord,
@@ -17,6 +17,8 @@ import {
 import { subscribeToAccountsDirectory, linkRegisteredUserToPerson } from '../auth/accountService'
 import {
   generateQrCredentials,
+  importQrCredentials,
+  deleteQrCredential,
   assignQrToPerson,
   revokeQrForPerson,
   resolveAssignedQrToPerson,
@@ -29,6 +31,7 @@ import { QR_CODE_LENGTH, buildQrCredentialLink, normalizeQrInput } from '../qr/q
 const quickTopupAmounts = [2000, 5000, 10000, 20000]
 const KEYBOARD_SCANNER_MAX_GAP_MS = 350
 const KEYBOARD_SCANNER_FLUSH_MS = 500
+const huCollator = new Intl.Collator('hu', { sensitivity: 'base', numeric: true })
 
 const emptyEditState = {
   displayName: '',
@@ -131,6 +134,32 @@ function parsePersonaExcelRows(workbook) {
   ])
 }
 
+function parseQrExcelCodes(workbook) {
+  const firstSheetName = workbook.SheetNames[0]
+  const sheet = workbook.Sheets[firstSheetName]
+  const rawRows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: '' })
+  const nonEmptyRows = rawRows.filter((row) => row.some((cell) => `${cell ?? ''}`.trim()))
+  if (!nonEmptyRows.length) return []
+
+  const firstRow = nonEmptyRows[0].map(normalizeImportHeader)
+  const codeIndex = firstRow.findIndex((header) => ['code', 'kod', 'kód', 'qr', 'qrcode', 'qrkod', 'qrkód'].includes(header))
+  const linkIndex = firstRow.findIndex((header) => ['link', 'url'].includes(header))
+  const hasHeader = codeIndex >= 0 || linkIndex >= 0
+  const valueIndex = codeIndex >= 0 ? codeIndex : linkIndex >= 0 ? linkIndex : 0
+
+  return (hasHeader ? nonEmptyRows.slice(1) : nonEmptyRows)
+    .map((row) => row[valueIndex])
+    .map((value) => `${value ?? ''}`.trim())
+    .filter(Boolean)
+}
+
+function splitQrImportInput(value) {
+  return `${value ?? ''}`
+    .split(/[\s,;]+/g)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 const COMPLETENESS_LABELS = { complete: 'Kész', partial: 'Részleges', incomplete: 'Hiányos' }
 const COMPLETENESS_COLORS = {
   complete:   { background: 'color-mix(in srgb, var(--success) 12%, transparent)', color: '#15803d', border: '#86efac' },
@@ -152,17 +181,6 @@ function getStatusLabel(status) {
       return 'visszavonva'
     default:
       return status || '-'
-  }
-}
-
-function getAttendeeTypeLabel(type) {
-  switch (type) {
-    case ATTENDEE_TYPES.freshman:
-      return 'Gólya'
-    case ATTENDEE_TYPES.organizer:
-      return 'Szervező'
-    default:
-      return type || '-'
   }
 }
 
@@ -218,8 +236,8 @@ function PersonProfileTab({ selectedPerson, editState, setEditState, pending, on
           value={editState.attendeeType}
           onChange={(e) => setEditState((s) => ({ ...s, attendeeType: e.target.value }))}
         >
-          <option value={ATTENDEE_TYPES.freshman}>Gólya</option>
-          <option value={ATTENDEE_TYPES.organizer}>Szervező</option>
+          <option value={ATTENDEE_TYPES.freshman}>{getAttendeeTypeLabel(ATTENDEE_TYPES.freshman)}</option>
+          <option value={ATTENDEE_TYPES.organizer}>{getAttendeeTypeLabel(ATTENDEE_TYPES.organizer)}</option>
         </select>
       </div>
       <div className="field">
@@ -452,6 +470,7 @@ function PersonBalanceTab({
   onQuickTopup,
   onCustomTopup,
   onManualAdjustment,
+  allowManualAdjustment = true,
 }) {
   return (
     <div className="stack-block" style={{ gap: '20px' }}>
@@ -495,6 +514,7 @@ function PersonBalanceTab({
         </div>
       </div>
 
+      {allowManualAdjustment ? (
       <div className="stack-block" style={{ gap: '10px', paddingTop: '4px', borderTop: '1px dashed var(--border)' }}>
         <p className="helper-text" style={{ marginBottom: 0 }}>Kézi korrekció (negatív is lehet)</p>
         <div className="field">
@@ -521,6 +541,7 @@ function PersonBalanceTab({
           </button>
         </div>
       </div>
+      ) : null}
     </div>
   )
 }
@@ -548,7 +569,7 @@ function QrImage({ value, size = 160 }) {
   )
 }
 
-function QrPoolRow({ cred }) {
+function QrPoolRow({ cred, pending = false, onDelete = null }) {
   const [expanded, setExpanded] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const value = buildQrCredentialLink(cred.code) || cred.link || cred.code
@@ -595,6 +616,17 @@ function QrPoolRow({ cred }) {
           >
             {downloading ? '…' : '↓ PNG'}
           </button>
+          {onDelete ? (
+            <button
+              type="button"
+              className="danger-button btn-sm"
+              onClick={() => onDelete(cred)}
+              disabled={pending}
+              title="QR azonosító törlése"
+            >
+              Törlés
+            </button>
+          ) : null}
         </span>
       </div>
       {expanded && value ? (
@@ -607,42 +639,87 @@ function QrPoolRow({ cred }) {
   )
 }
 
-function buildPrintHtml(items) {
+// Available print sizes — first entry is the default (1.5 cm).
+const QR_PRINT_SIZES_MM = [10, 15, 20, 25, 30, 40, 50]
+const QR_PRINT_DEFAULT_MM = 15
+
+function buildPrintHtml(items, sizeMm = QR_PRINT_DEFAULT_MM) {
+  // A4 portrait: 210mm wide with 10mm margin each side → 190mm usable.
+  const usableMm = 190
+  const gapMm = 2.5
+  const cols = Math.max(1, Math.floor((usableMm + gapMm) / (sizeMm + gapMm)))
+  // Scale the label proportionally to the QR size so it stays readable.
+  const labelPt = Math.max(5, Math.min(14, Math.round(sizeMm * 0.45)))
+  const labelMarginMm = Math.max(0.6, sizeMm * 0.06).toFixed(2)
+
+  // Basic HTML escape so person names with quotes/angle brackets don't break markup.
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
+  // Estimate the largest font size at which `name` fits inside `widthMm` on a
+  // single line. Uses an avg Arial glyph width of ~0.55em and 1pt ≈ 0.3528mm,
+  // with a small safety factor (×0.95) so wider-than-average names (W/M-heavy)
+  // still fit. Never exceeds the default label size, and bottoms out at 3pt
+  // so it remains at least somewhat legible.
+  const fitNameFontPt = (name, widthMm, defaultPt) => {
+    if (!name) return defaultPt
+    const avgGlyphEm = 0.55
+    const ptToMm = 0.3528
+    const safety = 0.95
+    const maxPt = (widthMm * safety) / (name.length * avgGlyphEm * ptToMm)
+    return Math.max(3, Math.min(defaultPt, maxPt))
+  }
+
   const cells = items
-    .map(({ code, dataUrl }) =>
-      `<div class="cell"><img src="${dataUrl}" alt="${code}"><div class="lbl">${code}</div></div>`,
-    )
+    .map(({ code, dataUrl, name }) => {
+      let nameLine = ''
+      if (name) {
+        const nameFontPt = fitNameFontPt(name, sizeMm, labelPt).toFixed(2)
+        nameLine = `<div class="name" style="font-size:${nameFontPt}pt">${esc(name)}</div>`
+      }
+      return `<div class="cell"><img src="${dataUrl}" alt="${esc(code)}"><div class="lbl">${esc(code)}</div>${nameLine}</div>`
+    })
     .join('')
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>QR Codes — ${items.length} codes</title>
+<title>QR Codes — ${items.length} codes (${sizeMm}mm)</title>
 <style>
   @page { size: A4 portrait; margin: 10mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; background: #fff; }
   .grid {
     display: grid;
-    grid-template-columns: repeat(11, 15mm);
-    gap: 2.5mm;
+    grid-template-columns: repeat(${cols}, ${sizeMm}mm);
+    gap: ${gapMm}mm;
   }
   .cell {
     break-inside: avoid;
     text-align: center;
   }
   .cell img {
-    width: 15mm;
-    height: 15mm;
+    width: ${sizeMm}mm;
+    height: ${sizeMm}mm;
     display: block;
   }
   .lbl {
-    font-size: 6pt;
+    font-size: ${labelPt}pt;
     font-family: 'Courier New', monospace;
     letter-spacing: 0.04em;
-    margin-top: 0.8mm;
+    margin-top: ${labelMarginMm}mm;
     line-height: 1.2;
+  }
+  .name {
+    /* font-size is set inline per-cell so each name shrinks just enough to fit */
+    font-family: Arial, sans-serif;
+    font-weight: 600;
+    margin-top: 0.4mm;
+    line-height: 1.1;
+    white-space: nowrap;
+    max-width: ${sizeMm}mm;
   }
 </style>
 </head>
@@ -654,28 +731,53 @@ function buildPrintHtml(items) {
 function QrPoolTab({
   qrCredentials,
   unassignedQrCredentials,
+  assignedQrCredentials,
   revokedQrCredentials,
+  peopleById,
+  qrManualInput,
+  setQrManualInput,
+  qrImportText,
+  setQrImportText,
+  qrImportFileRef,
   qrGenerationCount,
   setQrGenerationCount,
   pending,
   onGenerateBatch,
+  onManualAdd,
+  onImportText,
+  onImportFile,
+  onExportUnused,
+  onDeleteCredential,
 }) {
-  const [printLoading, setPrintLoading] = useState(false)
-  const assignedCount = qrCredentials.filter((c) => c.status === QR_CREDENTIAL_STATUSES.assigned).length
+  // Single loading key: 'unassigned' | 'assigned' | null — only one print
+  // job runs at a time and the right button shows its own spinner state.
+  const [printingKey, setPrintingKey] = useState(null)
+  const [printSizeMm, setPrintSizeMm] = useState(QR_PRINT_DEFAULT_MM)
+  const [printIncludeNames, setPrintIncludeNames] = useState(false)
+  const assignedCount = assignedQrCredentials.length
 
-  async function handlePrint() {
-    const eligible = unassignedQrCredentials.filter((c) => c.link || c.code)
+  async function handlePrintList(creds, key) {
+    const eligible = creds.filter((c) => c.link || c.code)
     if (!eligible.length) return
-    setPrintLoading(true)
+    setPrintingKey(key)
     try {
+      // Render the QR PNG at ~20px per printed mm so larger sizes stay crisp
+      // (≈500dpi source). Floor at 200px so the smallest size isn't blurry.
+      const renderPx = Math.max(200, Math.round(printSizeMm * 20))
       const items = await Promise.all(
         eligible.map(async (cred) => {
           const value = buildQrCredentialLink(cred.code) || cred.link || cred.code
-          const dataUrl = await QRCode.toDataURL(value, { width: 200, margin: 1, errorCorrectionLevel: 'M' })
-          return { code: cred.code, dataUrl }
+          const dataUrl = await QRCode.toDataURL(value, { width: renderPx, margin: 1, errorCorrectionLevel: 'M' })
+          // Only attach a name when the checkbox is on AND the credential is linked
+          // to a person we have in memory. Unlinked entries print code-only as before.
+          const person = printIncludeNames && cred.assignedPersonaId
+            ? peopleById?.get(cred.assignedPersonaId)
+            : null
+          const name = person?.displayName || null
+          return { code: cred.code, dataUrl, name }
         }),
       )
-      const html = buildPrintHtml(items)
+      const html = buildPrintHtml(items, printSizeMm)
       const win = window.open('', '_blank', 'width=900,height=700')
       if (!win) return
       win.document.write(html)
@@ -685,8 +787,32 @@ function QrPoolTab({
     } catch (error) {
       console.error('Nyomtatás sikertelen', error)
     } finally {
-      setPrintLoading(false)
+      setPrintingKey(null)
     }
+  }
+
+  function renderPrintSizePicker(idSuffix) {
+    return (
+      <label
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: 'var(--muted)' }}
+        htmlFor={`qrPrintSize-${idSuffix}`}
+      >
+        Méret
+        <select
+          id={`qrPrintSize-${idSuffix}`}
+          value={printSizeMm}
+          onChange={(e) => setPrintSizeMm(Number(e.target.value))}
+          disabled={printingKey !== null}
+          style={{ padding: '4px 6px', fontSize: '0.8rem' }}
+        >
+          {QR_PRINT_SIZES_MM.map((mm) => (
+            <option key={mm} value={mm}>
+              {(mm / 10).toFixed(mm % 10 === 0 ? 0 : 1)} cm
+            </option>
+          ))}
+        </select>
+      </label>
+    )
   }
 
   return (
@@ -732,6 +858,57 @@ function QrPoolTab({
         </div>
       </section>
 
+      <section className="panel">
+        <h4 className="card-title">Kézi QR hozzáadás / import</h4>
+        <p className="helper-text">
+          4 jegyű kódokat vagy QR linkeket adhatsz meg. Beillesztésnél szóköz, vessző, pontosvessző vagy sortörés is használható.
+        </p>
+        <div className="form-grid" style={{ marginTop: '12px' }}>
+          <div className="field">
+            <label htmlFor="qrManualInput">Kézi kódok</label>
+            <input
+              id="qrManualInput"
+              value={qrManualInput}
+              onChange={(event) => setQrManualInput(event.target.value)}
+              placeholder="1234 vagy https://kasszaserzsi.hu/qr/1234"
+              disabled={pending}
+            />
+          </div>
+          <div className="button-row">
+            <button type="button" className="primary-button" onClick={onManualAdd} disabled={pending || !qrManualInput.trim()}>
+              Kód hozzáadása
+            </button>
+          </div>
+          <div className="field">
+            <label htmlFor="qrImportText">Lista import</label>
+            <textarea
+              id="qrImportText"
+              className="text-area"
+              value={qrImportText}
+              onChange={(event) => setQrImportText(event.target.value)}
+              placeholder={'1234\nhttps://kasszaserzsi.hu/qr/5678'}
+              rows={5}
+              disabled={pending}
+            />
+          </div>
+          <div className="button-row">
+            <button type="button" className="secondary-button" onClick={onImportText} disabled={pending || !qrImportText.trim()}>
+              Lista importálása
+            </button>
+            <button type="button" className="secondary-button" onClick={() => qrImportFileRef.current?.click()} disabled={pending}>
+              Excel import
+            </button>
+            <input
+              ref={qrImportFileRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={onImportFile}
+              style={{ display: 'none' }}
+            />
+          </div>
+        </div>
+      </section>
+
       {/* Unassigned pool */}
       <section className="panel">
         <div className="split-header" style={{ marginBottom: '10px' }}>
@@ -739,24 +916,79 @@ function QrPoolTab({
             <h4 className="card-title">Szabad készlet ({unassignedQrCredentials.length})</h4>
             <p className="helper-text">Personához rendelhető azonosítók.</p>
           </div>
+          <button
+            type="button"
+            className="secondary-button btn-sm"
+            onClick={onExportUnused}
+            disabled={pending || unassignedQrCredentials.length === 0}
+            title="Szabad QR kódok exportálása Excelbe"
+          >
+            Export
+          </button>
           {unassignedQrCredentials.length > 0 ? (
-            <button
-              type="button"
-              className="secondary-button btn-sm"
-              onClick={handlePrint}
-              disabled={printLoading}
-              title="Nyomtatható A4-es lap generálása az összes szabad QR kóddal"
-            >
-              {printLoading ? 'Generálás...' : 'Nyomtatási lap'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {renderPrintSizePicker('unassigned')}
+              <button
+                type="button"
+                className="secondary-button btn-sm"
+                onClick={() => handlePrintList(unassignedQrCredentials, 'unassigned')}
+                disabled={printingKey !== null}
+                title="Nyomtatható A4-es lap generálása az összes szabad QR kóddal"
+              >
+                {printingKey === 'unassigned' ? 'Generálás...' : 'Nyomtatási lap'}
+              </button>
+            </div>
           ) : null}
         </div>
         <div className="qr-pool-list">
           {unassignedQrCredentials.map((cred) => (
-            <QrPoolRow key={cred.id} cred={cred} />
+            <QrPoolRow key={cred.id} cred={cred} pending={pending} onDelete={onDeleteCredential} />
           ))}
           {unassignedQrCredentials.length === 0 && (
             <p className="helper-text">Nincs szabad azonosító. Generálj egy új adagot fent.</p>
+          )}
+        </div>
+      </section>
+
+      {/* Assigned (taken) pool — same view & print flow as the free pool */}
+      <section className="panel">
+        <div className="split-header" style={{ marginBottom: '10px' }}>
+          <div>
+            <h4 className="card-title">Foglalt készlet ({assignedQrCredentials.length})</h4>
+            <p className="helper-text">Personához már hozzárendelt azonosítók.</p>
+          </div>
+          {assignedQrCredentials.length > 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <label
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.8rem', color: 'var(--muted)' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={printIncludeNames}
+                  onChange={(e) => setPrintIncludeNames(e.target.checked)}
+                  disabled={printingKey !== null}
+                />
+                Nevekkel
+              </label>
+              {renderPrintSizePicker('assigned')}
+              <button
+                type="button"
+                className="secondary-button btn-sm"
+                onClick={() => handlePrintList(assignedQrCredentials, 'assigned')}
+                disabled={printingKey !== null}
+                title="Nyomtatható A4-es lap generálása az összes foglalt QR kóddal"
+              >
+                {printingKey === 'assigned' ? 'Generálás...' : 'Nyomtatási lap'}
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <div className="qr-pool-list">
+          {assignedQrCredentials.map((cred) => (
+            <QrPoolRow key={cred.id} cred={cred} />
+          ))}
+          {assignedQrCredentials.length === 0 && (
+            <p className="helper-text">Még nincs foglalt azonosító.</p>
           )}
         </div>
       </section>
@@ -767,7 +999,7 @@ function QrPoolTab({
         <p className="helper-text" style={{ marginBottom: '10px' }}>Végleg inaktivált azonosítók, nem rendelhetők újra.</p>
         <div className="qr-pool-list">
           {revokedQrCredentials.map((cred) => (
-            <QrPoolRow key={cred.id} cred={cred} />
+            <QrPoolRow key={cred.id} cred={cred} pending={pending} onDelete={onDeleteCredential} />
           ))}
           {revokedQrCredentials.length === 0 && (
             <p className="helper-text">Nincs visszavont azonosító.</p>
@@ -779,7 +1011,7 @@ function QrPoolTab({
 }
 
 // ── Main export ────────────────────────────────────────────────────────────
-export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) {
+export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', allowManualAdjustment = true }) {
   const [people, setPeople] = useState([])
   const [accounts, setAccounts] = useState([])
   const [qrCredentials, setQrCredentials] = useState([])
@@ -794,19 +1026,23 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
   const [qrInput, setQrInput] = useState('')
   const [qrScanActive, setQrScanActive] = useState(false)
   const [qrGenerationCount, setQrGenerationCount] = useState('20')
+  const [qrManualInput, setQrManualInput] = useState('')
+  const [qrImportText, setQrImportText] = useState('')
   const [customTopupAmount, setCustomTopupAmount] = useState('')
   const [manualAmount, setManualAmount] = useState('')
   const [manualReason, setManualReason] = useState('')
   const [showDeleted, setShowDeleted] = useState(false)
   const [pending, setPending] = useState(false)
   const [activePersonTab, setActivePersonTab] = useState('profile')
-  const activeTopTab = view === 'qrpool' ? 'qrpool' : 'personas'
+  const activeTopTab = view === 'qrpool' ? 'qrpool' : view === 'topup' ? 'topup' : 'personas'
+  const isPersonaScannerView = activeTopTab === 'personas' || activeTopTab === 'topup'
   const selectedPersonTargetTabRef = useRef('profile')
   const personaQrAutoSelectRef = useRef('')
   const keyboardScannerBufferRef = useRef('')
   const keyboardScannerLastKeyAtRef = useRef(0)
   const keyboardScannerFlushTimerRef = useRef(null)
   const hiddenPersonaScannerInputRef = useRef(null)
+  const qrImportFileRef = useRef(null)
 
   useEffect(() => {
     return subscribeToPeople(eventId, setPeople, (error) => setErrorMessage(error.message))
@@ -817,11 +1053,18 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
   }, [])
 
   useEffect(() => {
+    if (activeTopTab === 'topup') {
+      setQrCredentials([])
+      return undefined
+    }
+
     return subscribeToQrCredentials(eventId, setQrCredentials, (error) => setErrorMessage(error.message))
-  }, [eventId])
+  }, [activeTopTab, eventId])
 
   const visiblePeople = useMemo(() => {
-    return people.filter((person) => showDeleted || person.recordStatus !== PERSON_RECORD_STATUSES.deleted)
+    return people
+      .filter((person) => showDeleted || person.recordStatus !== PERSON_RECORD_STATUSES.deleted)
+      .toSorted((a, b) => huCollator.compare(a.displayName || '', b.displayName || ''))
   }, [people, showDeleted])
 
   const filteredVisiblePeople = useMemo(() => {
@@ -882,6 +1125,16 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
     return qrCredentials.filter((credential) => credential.status === QR_CREDENTIAL_STATUSES.unassigned)
   }, [qrCredentials])
 
+  const assignedQrCredentials = useMemo(() => {
+    return qrCredentials.filter((credential) => credential.status === QR_CREDENTIAL_STATUSES.assigned)
+  }, [qrCredentials])
+
+  const peopleById = useMemo(() => {
+    const map = new Map()
+    people.forEach((person) => map.set(person.id, person))
+    return map
+  }, [people])
+
   const revokedQrCredentials = useMemo(() => {
     return qrCredentials.filter((credential) => credential.status === QR_CREDENTIAL_STATUSES.revoked)
   }, [qrCredentials])
@@ -938,7 +1191,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
   }, [selectedPersonId])
 
   const focusHiddenPersonaScannerInput = useCallback((force = false) => {
-    if (activeTopTab !== 'personas' || qrScanActive) {
+    if (!isPersonaScannerView || qrScanActive) {
       return
     }
 
@@ -952,7 +1205,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
     }
 
     hiddenInput.focus({ preventScroll: true })
-  }, [activeTopTab, qrScanActive])
+  }, [isPersonaScannerView, qrScanActive])
 
   const trySelectPersonaFromQr = useCallback((rawValue) => {
     const trimmedValue = String(rawValue || '').trim()
@@ -1025,7 +1278,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
   }, [focusHiddenPersonaScannerInput, selectedPersonId])
 
   useEffect(() => {
-    if (activeTopTab !== 'personas') {
+    if (!isPersonaScannerView) {
       return undefined
     }
 
@@ -1094,7 +1347,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
       clearKeyboardScannerFlushTimer()
       window.removeEventListener('keydown', handleGlobalKeyDown, true)
     }
-  }, [activeTopTab, qrScanActive, trySelectPersonaFromQr])
+  }, [isPersonaScannerView, qrScanActive, trySelectPersonaFromQr])
 
   function handleHiddenPersonaScannerInputBlur() {
     window.setTimeout(focusHiddenPersonaScannerInput, 0)
@@ -1124,7 +1377,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
 
   // Reset per-person state when selection changes
   useEffect(() => {
-    setActivePersonTab(selectedPersonTargetTabRef.current || 'profile')
+    setActivePersonTab(selectedPersonTargetTabRef.current || (activeTopTab === 'topup' ? 'balance' : 'profile'))
     selectedPersonTargetTabRef.current = 'profile'
     setAccountSearch('')
     setQrInput('')
@@ -1132,7 +1385,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
     setManualAmount('')
     setManualReason('')
     setCustomTopupAmount('')
-  }, [selectedPersonId])
+  }, [activeTopTab, selectedPersonId])
 
   useEffect(() => {
     if (!selectedPerson) {
@@ -1265,6 +1518,84 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
     } catch { /* handled */ }
   }
 
+  async function importQrCodeList(codes, successPrefix) {
+    if (!codes.length) {
+      setErrorMessage('Nincs importálható QR kód.')
+      return null
+    }
+
+    try {
+      const result = await runAction(
+        () => importQrCredentials({ eventId, codes }),
+        'A QR import sikertelen.',
+      )
+      setStatusMessage(`${successPrefix}: ${result.count} QR hozzáadva, ${result.skippedCount || 0} kihagyva.`)
+      return result
+    } catch {
+      return null
+    }
+  }
+
+  async function handleManualQrAdd() {
+    const result = await importQrCodeList(splitQrImportInput(qrManualInput), 'Kézi QR hozzáadás')
+    if (result) {
+      setQrManualInput('')
+    }
+  }
+
+  async function handleQrTextImport() {
+    const result = await importQrCodeList(splitQrImportInput(qrImportText), 'QR lista import')
+    if (result) {
+      setQrImportText('')
+    }
+  }
+
+  async function handleQrExcelImport(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      await importQrCodeList(parseQrExcelCodes(workbook), 'QR Excel import')
+    } catch (error) {
+      setErrorMessage(error?.message || 'QR Excel import sikertelen.')
+    }
+  }
+
+  function handleExportUnusedQrs() {
+    if (!unassignedQrCredentials.length) {
+      setErrorMessage('Nincs exportálható szabad QR.')
+      return
+    }
+
+    const rows = unassignedQrCredentials.map((credential) => ({
+      Code: credential.code || '',
+      Link: credential.link || buildQrCredentialLink(credential.code) || '',
+      Status: credential.status || QR_CREDENTIAL_STATUSES.unassigned,
+    }))
+    const worksheet = XLSX.utils.json_to_sheet(rows, { header: ['Code', 'Link', 'Status'] })
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Unused QRs')
+    const stamp = new Date().toISOString().slice(0, 10)
+    XLSX.writeFile(workbook, `unused-qrs-${eventId}-${stamp}.xlsx`)
+    setStatusMessage(`${rows.length} szabad QR exportálva.`)
+  }
+
+  async function handleDeleteQrCredential(credential) {
+    if (!credential?.code) return
+    const confirmed = window.confirm(`${credential.code} QR azonosító törlése?`)
+    if (!confirmed) return
+
+    try {
+      await runAction(
+        () => deleteQrCredential({ eventId, qrInput: credential.code }),
+        'A QR azonosító törlése sikertelen.',
+      )
+      setStatusMessage(`${credential.code} QR azonosító törölve.`)
+    } catch { /* handled */ }
+  }
+
   async function handleAssignQr(rawValue = qrInput) {
     if (!selectedPerson) return
     try {
@@ -1327,7 +1658,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
       const rows = visiblePeople.map((person) => ({
         Nev: person.displayName || '',
         Csapat: person.team || '',
-        Tipus: person.attendeeType || '',
+        Tipus: getAttendeeTypeLabel(person.attendeeType),
         Shibboleth: person.shibboleth || '',
       }))
       const sheet = XLSX.utils.json_to_sheet(rows, {
@@ -1375,25 +1706,28 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
       {errorMessage ? <div className="error-banner" style={{ marginBottom: '12px' }}>{errorMessage}</div> : null}
       {statusMessage ? <div className="status-inline" style={{ marginBottom: '12px' }}>{statusMessage}</div> : null}
 
+      {isPersonaScannerView ? (
+        <input
+          ref={hiddenPersonaScannerInputRef}
+          className="pos-hidden-scanner-input"
+          type="text"
+          autoComplete="off"
+          inputMode="none"
+          aria-hidden="true"
+          tabIndex={-1}
+          onBlur={handleHiddenPersonaScannerInputBlur}
+          onChange={handleHiddenPersonaScannerInputChange}
+          onKeyDown={handleHiddenPersonaScannerInputKeyDown}
+        />
+      ) : null}
+
       {/* ── PERSONAS TAB ── */}
       {activeTopTab === 'personas' && (
         <>
-          <input
-            ref={hiddenPersonaScannerInputRef}
-            className="pos-hidden-scanner-input"
-            type="text"
-            autoComplete="off"
-            inputMode="none"
-            aria-hidden="true"
-            tabIndex={-1}
-            onBlur={handleHiddenPersonaScannerInputBlur}
-            onChange={handleHiddenPersonaScannerInputChange}
-            onKeyDown={handleHiddenPersonaScannerInputKeyDown}
-          />
           {/* Three-column grid */}
           <div className="three-column-grid">
             {/* Col 1: Import */}
-            <section className="panel">
+            <section className="panel personas-list-panel">
               <h4 className="card-title">Personák importálása</h4>
               <p className="helper-text">
                 Soronként egy résztvevő: <strong>név, csapat, típus, shibboleth</strong> (tab, pontosvessző vagy vessző).
@@ -1419,7 +1753,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
                     className="text-area"
                     value={importText}
                     onChange={(e) => setImportText(e.target.value)}
-                    placeholder={'Kiss Anna\tPiros\tfreshman\tSHIB-123'}
+                    placeholder={'Birtalan Katalin, Shinto wo sasageyo, gólya, birka2'}
                     rows={10}
                   />
                 </div>
@@ -1490,7 +1824,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
                   autoComplete="off"
                 />
               </div>
-              <div className="record-list">
+              <div className="record-list personas-scroll-list">
                 {filteredVisiblePeople.map((person) => {
                   const completeness = buildPersonaCompleteness(person)
                   const colors = COMPLETENESS_COLORS[completeness]
@@ -1640,15 +1974,146 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas' }) 
       )}
 
       {/* ── QR POOL TAB ── */}
+      {activeTopTab === 'topup' && (
+        <div className="topup-page-grid">
+          <section className="panel personas-list-panel">
+            <div className="split-header personas-list-header" style={{ marginBottom: '10px' }}>
+              <div className="personas-list-title">
+                <h4 className="card-title">Persona feltöltés</h4>
+                <p className="helper-text">Keress névre, vagy olvass be QR-t. A QR automatikusan az egyenleg panelre vált.</p>
+              </div>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={showDeleted}
+                  onChange={(e) => setShowDeleted(e.target.checked)}
+                />
+                <span style={{ fontSize: '0.78rem' }}>Töröltek</span>
+              </label>
+            </div>
+
+            <div className="field personas-search-field">
+              <label htmlFor="topupPersonaSearch">Keresés vagy QR beolvasás</label>
+              <input
+                id="topupPersonaSearch"
+                value={personaSearch}
+                onChange={(event) => setPersonaSearch(event.target.value)}
+                placeholder="Név, csapat, shibboleth, QR kód vagy QR link"
+                autoComplete="off"
+              />
+            </div>
+
+            <div className="record-list personas-scroll-list">
+              {filteredVisiblePeople.map((person) => {
+                const completeness = buildPersonaCompleteness(person)
+                const colors = COMPLETENESS_COLORS[completeness]
+                return (
+                  <button
+                    key={person.id}
+                    type="button"
+                    className={`record-row${selectedPersonId === person.id ? ' selected' : ''}`}
+                    onClick={() => selectPerson(person.id, 'balance')}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
+                      <CompletenessDot completeness={completeness} />
+                      <span>
+                        <strong>{person.displayName}</strong>
+                        <small>
+                          {getPersonDisplayId(person)}
+                          {person.team ? ` · ${person.team}` : ''}
+                        </small>
+                      </span>
+                    </span>
+                    <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', flexShrink: 0 }}>
+                      <small style={{ fontWeight: 700 }}>{formatHuf(person.balance || 0)}</small>
+                      <small
+                        style={{
+                          fontSize: '0.68rem',
+                          padding: '1px 6px',
+                          borderRadius: '999px',
+                          border: `1px solid ${colors.border}`,
+                          background: colors.background,
+                          color: colors.color,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {COMPLETENESS_LABELS[completeness]}
+                      </small>
+                    </span>
+                  </button>
+                )
+              })}
+              {visiblePeople.length === 0 && (
+                <p className="helper-text">Még nincs persona.</p>
+              )}
+              {visiblePeople.length > 0 && filteredVisiblePeople.length === 0 && (
+                <p className="helper-text">Nincs a keresésnek megfelelő persona.</p>
+              )}
+            </div>
+          </section>
+
+          <section className="panel">
+            {!selectedPerson ? (
+              <StatusCard
+                title="Válassz personát"
+                tone="warning"
+                body="Kattints egy personára, keress, vagy olvass be QR-t a feltöltéshez."
+              />
+            ) : (
+              <div className="stack-block" style={{ gap: '16px' }}>
+                <div className="split-header" style={{ marginBottom: 0 }}>
+                  <div>
+                    <h4 className="card-title">{selectedPerson.displayName}</h4>
+                    <p className="helper-text">
+                      {getPersonDisplayId(selectedPerson)}
+                      {selectedPerson.team ? ` · ${selectedPerson.team}` : ''}
+                      {selectedPerson.shibboleth ? ` · ${selectedPerson.shibboleth}` : ''}
+                    </p>
+                  </div>
+                  <span className="event-pill">{formatHuf(selectedPerson.balance || 0)}</span>
+                </div>
+
+                <PersonBalanceTab
+                  selectedPerson={selectedPerson}
+                  customTopupAmount={customTopupAmount}
+                  setCustomTopupAmount={setCustomTopupAmount}
+                  manualAmount={manualAmount}
+                  setManualAmount={setManualAmount}
+                  manualReason={manualReason}
+                  setManualReason={setManualReason}
+                  pending={pending}
+                  onQuickTopup={handleQuickTopup}
+                  onCustomTopup={handleCustomTopup}
+                  onManualAdjustment={handleManualAdjustment}
+                  allowManualAdjustment={allowManualAdjustment}
+                />
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
       {activeTopTab === 'qrpool' && (
         <QrPoolTab
           qrCredentials={qrCredentials}
           unassignedQrCredentials={unassignedQrCredentials}
+          assignedQrCredentials={assignedQrCredentials}
           revokedQrCredentials={revokedQrCredentials}
+          peopleById={peopleById}
+          qrManualInput={qrManualInput}
+          setQrManualInput={setQrManualInput}
+          qrImportText={qrImportText}
+          setQrImportText={setQrImportText}
+          qrImportFileRef={qrImportFileRef}
           qrGenerationCount={qrGenerationCount}
           setQrGenerationCount={setQrGenerationCount}
           pending={pending}
           onGenerateBatch={handleGenerateQrBatch}
+          onManualAdd={handleManualQrAdd}
+          onImportText={handleQrTextImport}
+          onImportFile={handleQrExcelImport}
+          onExportUnused={handleExportUnusedQrs}
+          onDeleteCredential={handleDeleteQrCredential}
         />
       )}
     </div>

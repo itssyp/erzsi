@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { read, utils } from 'xlsx'
 import { formatHuf, parseHufInteger } from '../../lib/money'
 import { PRODUCT_CATEGORIES, normalizeProductCategory } from '../products/productModels'
 import { clearProducts, deleteProduct, importProducts, saveProduct, subscribeToProducts } from '../products/productService'
+import { normalizeProductBarcode, parseBarcodeList } from '../products/productBarcodes'
 import { deleteModifierTemplate, saveModifierTemplate, subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
 
 const emptyProductState = {
@@ -14,6 +15,7 @@ const emptyProductState = {
   isTemporarilyUnavailable: false,
   modifierTemplateId: '',
   isDRS: false,
+  barcodes: [],
 }
 
 const PRODUCT_AVAILABILITY = {
@@ -32,6 +34,9 @@ const CATEGORY_COLOR_MAP = {
 }
 
 const DEFAULT_CATEGORY = { key: 'default', color: '#9ca3af' }
+const BARCODE_SCANNER_MIN_LENGTH = 8
+const BARCODE_SCANNER_MAX_GAP_MS = 120
+const BARCODE_SCANNER_FLUSH_MS = 220
 
 const PRODUCT_IMPORT_HEADERS = ['name', 'drs', 'price', 'category']
 const PRODUCT_IMPORT_HEADER_ALIASES = {
@@ -43,6 +48,10 @@ const PRODUCT_IMPORT_HEADER_ALIASES = {
   ar: 'price',
   category: 'category',
   kategoria: 'category',
+  barcode: 'barcodes',
+  barcodes: 'barcodes',
+  vonalkod: 'barcodes',
+  vonalkodok: 'barcodes',
 }
 
 function createIngredientField(label = '') {
@@ -166,6 +175,9 @@ async function parseImportedProducts(file) {
     const category = normalizeProductCategory(row[headerMap.category])
     const price = parseHufInteger(row[headerMap.price])
     const isDRS = parseImportBoolean(row[headerMap.drs])
+    const barcodes = headerMap.barcodes === undefined
+      ? []
+      : parseBarcodeList(row[headerMap.barcodes])
     const rowValues = [
       row[headerMap.name],
       row[headerMap.drs],
@@ -196,6 +208,12 @@ async function parseImportedProducts(file) {
       rowErrors.push('drs must be true or false')
     }
 
+    try {
+      barcodes.forEach((barcode) => normalizeProductBarcode(barcode))
+    } catch (error) {
+      rowErrors.push(error.message)
+    }
+
     if (rowErrors.length) {
       errors.push(`Row ${rowNumber}: ${rowErrors.join('; ')}.`)
       return
@@ -206,6 +224,7 @@ async function parseImportedProducts(file) {
       category,
       price,
       isDRS,
+      barcodes,
     })
   })
 
@@ -225,7 +244,7 @@ function productMatchesQuery(product, query, templateName) {
     return true
   }
 
-  return [product.name, normalizeProductCategory(product.category), templateName]
+  return [product.name, normalizeProductCategory(product.category), templateName, ...(product.barcodes || [])]
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
@@ -307,9 +326,48 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [importFileName, setImportFileName] = useState('')
+  const [barcodeInput, setBarcodeInput] = useState('')
   const importInputRef = useRef(null)
+  const barcodeScannerTimerRef = useRef(null)
+  const barcodeScannerBufferRef = useRef('')
+  const barcodeScannerLastKeyAtRef = useRef(0)
+  const barcodeScannerTargetRef = useRef(null)
+  const hiddenBarcodeScannerInputRef = useRef(null)
 
   const availabilityState = useMemo(() => getAvailabilityState(productState), [productState])
+
+  const addProductBarcode = useCallback((rawValue) => {
+    setErrorMessage('')
+
+    let barcode = ''
+    try {
+      barcode = normalizeProductBarcode(rawValue)
+    } catch (error) {
+      setErrorMessage(error.message)
+      return false
+    }
+
+    if ((productState.barcodes || []).includes(barcode)) {
+      setErrorMessage(`A(z) ${barcode} vonalkod mar ezen a termeken van.`)
+      return false
+    }
+
+    const owner = products.find((product) =>
+      product.id !== productState.productId && (product.barcodes || []).includes(barcode),
+    )
+    if (owner) {
+      setErrorMessage(`A(z) ${barcode} vonalkod mar a(z) "${owner.name}" termekhez tartozik.`)
+      return false
+    }
+
+    setProductState((current) => ({
+      ...current,
+      barcodes: [...(current.barcodes || []), barcode],
+    }))
+    setBarcodeInput('')
+    setStatusMessage(`Vonalkod hozzaadva: ${barcode}`)
+    return true
+  }, [productState.barcodes, productState.productId, products])
 
   useEffect(() => {
     return subscribeToProducts(eventId, setProducts, (error) => setErrorMessage(error.message))
@@ -318,6 +376,170 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   useEffect(() => {
     return subscribeToModifierTemplates(eventId, setModifierTemplates, (error) => setErrorMessage(error.message))
   }, [eventId])
+
+  const restoreScannerTarget = useCallback(() => {
+    const target = barcodeScannerTargetRef.current
+    barcodeScannerTargetRef.current = null
+    if (!target) return
+
+    if (target.id === 'productName') {
+      setProductState((current) => ({ ...current, name: target.initialValue }))
+      return
+    }
+
+    if (target.id === 'productPrice') {
+      setProductState((current) => ({ ...current, price: target.initialValue }))
+      return
+    }
+
+    if (target.id === 'productBarcode') {
+      setBarcodeInput(target.initialValue)
+      return
+    }
+
+    if (target.id === 'productSearch') {
+      setProductQuery(target.initialValue)
+      return
+    }
+
+    if (target.id === 'templateSearch') {
+      setTemplateQuery(target.initialValue)
+    }
+  }, [])
+
+  const clearBarcodeScannerTimer = useCallback(() => {
+    if (barcodeScannerTimerRef.current) {
+      window.clearTimeout(barcodeScannerTimerRef.current)
+      barcodeScannerTimerRef.current = null
+    }
+  }, [])
+
+  const focusHiddenBarcodeScannerInput = useCallback((force = false) => {
+    if (activeCatalogSection !== 'products' || pending) {
+      return
+    }
+
+    const activeElement = document.activeElement
+    const hiddenInput = hiddenBarcodeScannerInputRef.current
+    const tagName = activeElement?.tagName?.toLowerCase()
+    const activeElementIsTextEntry = tagName === 'input'
+      || tagName === 'textarea'
+      || tagName === 'select'
+      || activeElement?.isContentEditable
+
+    if (!hiddenInput || activeElement === hiddenInput || (!force && activeElementIsTextEntry)) {
+      return
+    }
+
+    hiddenInput.focus({ preventScroll: true })
+  }, [activeCatalogSection, pending])
+
+  const flushBarcodeScannerBuffer = useCallback(() => {
+    clearBarcodeScannerTimer()
+    const value = barcodeScannerBufferRef.current
+    barcodeScannerBufferRef.current = ''
+    barcodeScannerLastKeyAtRef.current = 0
+    if (hiddenBarcodeScannerInputRef.current) {
+      hiddenBarcodeScannerInputRef.current.value = ''
+    }
+
+    if (value.length < BARCODE_SCANNER_MIN_LENGTH) {
+      barcodeScannerTargetRef.current = null
+      return false
+    }
+
+    const added = addProductBarcode(value)
+    if (added) {
+      restoreScannerTarget()
+    } else {
+      barcodeScannerTargetRef.current = null
+    }
+
+    return added
+  }, [addProductBarcode, clearBarcodeScannerTimer, restoreScannerTarget])
+
+  const scheduleBarcodeScannerFlush = useCallback(() => {
+    clearBarcodeScannerTimer()
+    barcodeScannerTimerRef.current = window.setTimeout(flushBarcodeScannerBuffer, BARCODE_SCANNER_FLUSH_MS)
+  }, [clearBarcodeScannerTimer, flushBarcodeScannerBuffer])
+
+  useEffect(() => {
+    function rememberScannerTarget() {
+      const element = document.activeElement
+      const tagName = element?.tagName?.toLowerCase()
+      const isTextInput = tagName === 'input' || tagName === 'textarea'
+
+      barcodeScannerTargetRef.current = isTextInput
+        ? { id: element.id || '', initialValue: element.value || '' }
+        : null
+    }
+
+    function resetScannerBuffer() {
+      clearBarcodeScannerTimer()
+      barcodeScannerBufferRef.current = ''
+      barcodeScannerLastKeyAtRef.current = 0
+      barcodeScannerTargetRef.current = null
+    }
+
+    function handleGlobalKeyDown(event) {
+      if (event.ctrlKey || event.altKey || event.metaKey || activeCatalogSection !== 'products' || pending) {
+        return
+      }
+
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        if (barcodeScannerBufferRef.current.length >= BARCODE_SCANNER_MIN_LENGTH) {
+          event.preventDefault()
+          flushBarcodeScannerBuffer()
+        }
+        return
+      }
+
+      if (event.key.length !== 1) {
+        return
+      }
+
+      if (!/^\d$/.test(event.key)) {
+        resetScannerBuffer()
+        return
+      }
+
+      const now = Date.now()
+      if (now - barcodeScannerLastKeyAtRef.current > BARCODE_SCANNER_MAX_GAP_MS) {
+        barcodeScannerBufferRef.current = ''
+        rememberScannerTarget()
+      }
+
+      barcodeScannerLastKeyAtRef.current = now
+      barcodeScannerBufferRef.current += event.key
+
+      if (barcodeScannerBufferRef.current.length >= 2) {
+        event.preventDefault()
+      }
+
+      scheduleBarcodeScannerFlush()
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true)
+
+    return () => {
+      clearBarcodeScannerTimer()
+      window.removeEventListener('keydown', handleGlobalKeyDown, true)
+    }
+  }, [activeCatalogSection, clearBarcodeScannerTimer, flushBarcodeScannerBuffer, pending, scheduleBarcodeScannerFlush])
+
+  useEffect(() => {
+    const focusTimer = window.setTimeout(focusHiddenBarcodeScannerInput, 0)
+    const scheduleScannerFocus = () => window.setTimeout(focusHiddenBarcodeScannerInput, 0)
+
+    window.addEventListener('pointerup', scheduleScannerFocus)
+    window.addEventListener('focus', scheduleScannerFocus)
+
+    return () => {
+      window.clearTimeout(focusTimer)
+      window.removeEventListener('pointerup', scheduleScannerFocus)
+      window.removeEventListener('focus', scheduleScannerFocus)
+    }
+  }, [focusHiddenBarcodeScannerInput])
 
   const sortedTemplates = useMemo(() => modifierTemplates.slice(), [modifierTemplates])
   const templateLookup = useMemo(
@@ -367,6 +589,40 @@ export function ProductManagementPanel({ eventId, actorUid }) {
     }
   }
 
+  function resetProductForm() {
+    clearBarcodeScannerTimer()
+    setBarcodeInput('')
+    setProductState(emptyProductState)
+  }
+
+  function handleHiddenBarcodeScannerInputBlur() {
+    window.setTimeout(focusHiddenBarcodeScannerInput, 0)
+  }
+
+  function handleHiddenBarcodeScannerInputChange(event) {
+    const nextValue = event.target.value
+    barcodeScannerBufferRef.current = nextValue
+    barcodeScannerLastKeyAtRef.current = Date.now()
+    scheduleBarcodeScannerFlush()
+
+    if (nextValue.length > 512) {
+      event.target.value = nextValue.slice(-512)
+      barcodeScannerBufferRef.current = event.target.value
+    }
+  }
+
+  function handleHiddenBarcodeScannerInputKeyDown(event) {
+    if (event.key !== 'Enter' && event.key !== 'Tab') {
+      return
+    }
+
+    if (barcodeScannerBufferRef.current.length >= BARCODE_SCANNER_MIN_LENGTH) {
+      event.preventDefault()
+      flushBarcodeScannerBuffer()
+      event.currentTarget.value = ''
+    }
+  }
+
   async function handleProductSubmit(event) {
     event.preventDefault()
     const isEditing = Boolean(productState.productId)
@@ -379,7 +635,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
       }),
     )
 
-    setProductState(emptyProductState)
+    resetProductForm()
     setStatusMessage(isEditing ? 'A termék frissítve lett.' : 'A termék létrejött.')
   }
 
@@ -397,7 +653,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
       }),
     )
 
-    setProductState(emptyProductState)
+    resetProductForm()
     setStatusMessage('A termék törölve lett.')
   }
 
@@ -449,9 +705,20 @@ export function ProductManagementPanel({ eventId, actorUid }) {
         actorUid,
       })
 
-      setProductState(emptyProductState)
+      resetProductForm()
       setStatusMessage(`${clearedCount} termék törölve lett a katalógusból.`)
     })
+  }
+
+  function handleManualBarcodeAdd() {
+    addProductBarcode(barcodeInput)
+  }
+
+  function removeProductBarcode(barcode) {
+    setProductState((current) => ({
+      ...current,
+      barcodes: (current.barcodes || []).filter((item) => item !== barcode),
+    }))
   }
 
   async function handleTemplateSubmit(event) {
@@ -489,6 +756,8 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   }
 
   function loadProductIntoForm(product) {
+    clearBarcodeScannerTimer()
+    setBarcodeInput('')
     setProductState({
       productId: product.id,
       name: product.name,
@@ -498,6 +767,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
       isTemporarilyUnavailable: product.isTemporarilyUnavailable,
       modifierTemplateId: product.modifierTemplateId || '',
       isDRS: product.isDRS || false,
+      barcodes: product.barcodes || [],
     })
     setStatusMessage('')
   }
@@ -572,11 +842,17 @@ export function ProductManagementPanel({ eventId, actorUid }) {
 
   return (
     <div className="admin-section">
-      <section className="page-heading">
-        <span className="eyebrow">Katalógus</span>
-        <h3>Termékek és módosítósablonok</h3>
-      </section>
-
+      <input
+        ref={hiddenBarcodeScannerInputRef}
+        className="pos-hidden-scanner-input"
+        type="text"
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        onBlur={handleHiddenBarcodeScannerInputBlur}
+        onChange={handleHiddenBarcodeScannerInputChange}
+        onKeyDown={handleHiddenBarcodeScannerInputKeyDown}
+      />
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
       {statusMessage ? <div className="status-inline">{statusMessage}</div> : null}
 
@@ -611,7 +887,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
             <button
               type="button"
               className="secondary-button"
-              onClick={() => setProductState(emptyProductState)}
+              onClick={resetProductForm}
               disabled={pending}
             >
               Új termék
@@ -638,7 +914,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                 <label
                   className="secondary-button catalog-import-btn"
                   htmlFor="productImportFile"
-                  title={`Oszlopok: name, drs, price, category (${PRODUCT_CATEGORIES.join(', ')})`}
+                  title={`Oszlopok: name, drs, price, category, barcodes (${PRODUCT_CATEGORIES.join(', ')})`}
                 >
                   ↑ Excel import
                 </label>
@@ -683,6 +959,9 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                             <span className={`catalog-cat-chip catalog-cat-chip--${categoryKey}`}>{normalizeProductCategory(product.category)}</span>
                             <span className="catalog-price-chip">{formatHuf(product.price)}</span>
                             {product.isDRS && <span className="catalog-drs-chip">DRS</span>}
+                            {(product.barcodes || []).length > 0 && (
+                              <span className="catalog-barcode-chip">{(product.barcodes || []).length} vonalkod</span>
+                            )}
                             {templateName && <span className="catalog-template-name">{templateName}</span>}
                           </span>
                         </span>
@@ -751,7 +1030,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                   <label>Kategória</label>
                   <div className="catalog-category-picker">
                     {PRODUCT_CATEGORIES.map((cat) => {
-                      const { key, color } = CATEGORY_COLOR_MAP[cat] || DEFAULT_CATEGORY
+                      const { key } = CATEGORY_COLOR_MAP[cat] || DEFAULT_CATEGORY
                       return (
                         <button
                           key={cat}
@@ -794,6 +1073,50 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                   {!sortedTemplates.length && (
                     <span className="helper-text">Még nincs sablon – először hozz létre egyet.</span>
                   )}
+                </div>
+                <div className="field catalog-barcode-field">
+                  <label htmlFor="productBarcode">Vonalkodok</label>
+                  <div className="catalog-barcode-capture-row">
+                    <input
+                      id="productBarcode"
+                      value={barcodeInput}
+                      onChange={(event) => setBarcodeInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          handleManualBarcodeAdd()
+                        }
+                      }}
+                      placeholder="EAN / UPC"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                    />
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleManualBarcodeAdd}
+                      disabled={pending || !barcodeInput.trim()}
+                    >
+                      Hozzaad
+                    </button>
+                  </div>
+                  <span className="helper-text">Olvasd be barhol az oldalon, vagy add meg kezzel. A 4 jegyu kodok persona QR-hoz vannak fenntartva.</span>
+                  {(productState.barcodes || []).length > 0 ? (
+                    <div className="catalog-barcode-chip-list">
+                      {productState.barcodes.map((barcode) => (
+                        <button
+                          key={barcode}
+                          type="button"
+                          className="catalog-barcode-token"
+                          onClick={() => removeProductBarcode(barcode)}
+                          title="Vonalkod eltavolitasa"
+                        >
+                          <span>{barcode}</span>
+                          <strong aria-hidden="true">x</strong>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="field">
                   <label className="checkbox-row">
@@ -866,7 +1189,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       <button
                         type="button"
                         className="secondary-button"
-                        onClick={() => setProductState(emptyProductState)}
+                        onClick={resetProductForm}
                         disabled={pending}
                       >
                         Mégse

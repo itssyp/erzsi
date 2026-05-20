@@ -9,6 +9,7 @@
  */
 
 import { assert, assertEqual, assertThrows, section, printSummary } from './helpers.js'
+import { normalizeProductBarcode, sanitizeProductBarcodes, tryNormalizeProductBarcode } from '../src/features/products/productBarcodes.js'
 
 // ─── Replicated logic (verbatim from source) ─────────────────────────────────
 
@@ -100,6 +101,52 @@ function normalizeScannedQrCode(rawValue) {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+function classifyCompletedScan(value, productBarcodes = new Map()) {
+  const rawValue = String(value || '').trim()
+  try {
+    return { type: 'person', value: normalizeScannedQrCode(rawValue) }
+  } catch { /* fall through */ }
+
+  const barcode = tryNormalizeProductBarcode(rawValue)
+  if (barcode) {
+    return {
+      type: productBarcodes.has(barcode) ? 'product' : 'unknownProduct',
+      value: barcode,
+    }
+  }
+
+  return { type: 'unknown', value: rawValue }
+}
+
+section('Product barcodes and completed scan classification')
+
+assertEqual(normalizeProductBarcode(' 5991234567890 '), '5991234567890', 'EAN barcode trims and normalizes')
+assertThrows(() => normalizeProductBarcode('8442'), '4', '4-digit product barcode is rejected')
+assertThrows(() => normalizeProductBarcode('ABC123'), 'szam', 'Non-numeric product barcode is rejected')
+assertEqual(
+  sanitizeProductBarcodes(['5991234567890', '5991234567891']).length,
+  2,
+  'Multiple barcodes are allowed on one product',
+)
+assertThrows(
+  () => sanitizeProductBarcodes(['5991234567890', '5991234567890']),
+  'Duplikalt',
+  'Duplicate barcode on one product is rejected',
+)
+
+const productBarcodeIndex = new Map([['8442612345678', { id: 'beer-1' }]])
+assertEqual(classifyCompletedScan('8442', productBarcodeIndex).type, 'person', 'Complete 4-digit scan stays a persona QR')
+assertEqual(
+  classifyCompletedScan('8442612345678', productBarcodeIndex).type,
+  'product',
+  'Long barcode that starts with a user QR prefix is classified as product',
+)
+assertEqual(
+  classifyCompletedScan('5999999999999', productBarcodeIndex).type,
+  'unknownProduct',
+  'Unknown numeric barcode is reported as unknown product',
+)
 
 // 1. Basket lock: session ownership
 section('Basket lock — session ownership')

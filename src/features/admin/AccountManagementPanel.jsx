@@ -2,14 +2,21 @@ import { useEffect, useMemo, useState } from 'react'
 import { subscribeToAccountsDirectory } from '../auth/accountService'
 import { createPrivilegedAccount, disablePrivilegedAccount, setAccountRole } from './adminService'
 import { ACCOUNT_STATUSES } from '../auth/accountModels'
-import { ROLES } from '../../lib/roles'
+import { PRIVILEGED_ROLES, ROLES } from '../../lib/roles'
 
 const initialFormState = {
   email: '',
   password: '',
   displayName: '',
-  role: ROLES.staff,
+  role: ROLES.posStaff,
 }
+
+const privilegedRoleOptions = [
+  { value: ROLES.admin, label: 'Admin' },
+  { value: ROLES.staff, label: 'Staff' },
+  { value: ROLES.topupStaff, label: 'Paku' },
+  { value: ROLES.posStaff, label: 'POS' },
+]
 
 function getAccountActionErrorMessage(error) {
   switch (error?.code) {
@@ -39,7 +46,7 @@ export function AccountManagementPanel({ actorUid }) {
   }, [])
 
   const privilegedAccounts = useMemo(() => {
-    return accounts.filter((account) => account.role === ROLES.staff || account.role === ROLES.admin)
+    return accounts.filter((account) => PRIVILEGED_ROLES.includes(account.role))
   }, [accounts])
 
   function updateField(event) {
@@ -161,8 +168,9 @@ export function AccountManagementPanel({ actorUid }) {
                 value={formState.role}
                 onChange={updateField}
               >
-                <option value={ROLES.staff}>staff</option>
-                <option value={ROLES.admin}>admin</option>
+                {privilegedRoleOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </div>
             <div className="button-row">
@@ -176,7 +184,7 @@ export function AccountManagementPanel({ actorUid }) {
         <section className="panel">
           <h4 className="card-title">Meglévő kiemelt fiókok</h4>
           <p className="helper-text">
-            Itt csak a staff/admin fiókok látszanak. A résztvevői fiókok továbbra is külön önregisztrációval jönnek létre.
+            Itt csak a kiemelt fiókok látszanak. A résztvevői fiókok továbbra is külön önregisztrációval jönnek létre.
           </p>
           <div className="record-list stacked">
             {privilegedAccounts.map((account) => (
@@ -193,22 +201,17 @@ export function AccountManagementPanel({ actorUid }) {
                 </div>
 
                 <div className="button-row">
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={pending || account.status === ACCOUNT_STATUSES.disabled || account.role === ROLES.staff}
-                    onClick={() => handleRoleChange(account, ROLES.staff)}
-                  >
-                    Staff
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={pending || account.status === ACCOUNT_STATUSES.disabled || account.role === ROLES.admin}
-                    onClick={() => handleRoleChange(account, ROLES.admin)}
-                  >
-                    Admin
-                  </button>
+                  {privilegedRoleOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className="secondary-button"
+                      disabled={pending || account.status === ACCOUNT_STATUSES.disabled || account.role === option.value}
+                      onClick={() => handleRoleChange(account, option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
                   <button
                     type="button"
                     className="danger-button"

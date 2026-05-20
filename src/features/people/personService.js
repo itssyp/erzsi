@@ -10,7 +10,8 @@ import {
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore'
-import { db } from '../../lib/firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions } from '../../lib/firebase'
 import {
   EVENT_SUBCOLLECTIONS,
   getAccountEventLinkPath,
@@ -32,6 +33,25 @@ import {
   buildPersonUpdatePatch,
 } from './personModels'
 import { buildAccountEventLinkMetadataPatch } from '../auth/accountModels'
+
+const topUpPersonBalanceCallable = httpsCallable(functions, 'topUpPersonBalance')
+
+function normalizeImportedAttendeeType(value) {
+  const normalized = `${value ?? ''}`.trim().toLowerCase()
+
+  switch (normalized) {
+    case ATTENDEE_TYPES.freshman:
+    case 'golya':
+    case 'gólya':
+      return ATTENDEE_TYPES.freshman
+    case ATTENDEE_TYPES.organizer:
+    case 'animator':
+    case 'animátor':
+      return ATTENDEE_TYPES.organizer
+    default:
+      return normalized
+  }
+}
 
 function buildInternalPersonId(personDocId) {
   return `P-${personDocId.slice(0, 8).toUpperCase()}`
@@ -59,7 +79,7 @@ export function parsePeopleImportRows(rows) {
 
   rows.forEach((row, index) => {
     const [nameRaw = '', teamRaw = '', attendeeTypeRaw = '', shibbolethRaw = ''] = row.map((item) => `${item ?? ''}`.trim())
-    const normalizedType = attendeeTypeRaw.toLowerCase()
+    const normalizedType = normalizeImportedAttendeeType(attendeeTypeRaw)
 
     if (!nameRaw) {
       rejectedRows.push({ lineNumber: index + 1, reason: 'Missing name', raw: row.join('\t') })
@@ -72,7 +92,7 @@ export function parsePeopleImportRows(rows) {
     ) {
       rejectedRows.push({
         lineNumber: index + 1,
-        reason: 'Status must be organizer or freshman',
+        reason: 'Status must be gólya or animátor',
         raw: row.join('\t'),
       })
       return
@@ -445,16 +465,14 @@ async function writeBalanceChange({
 }
 
 export async function topUpPersonBalance({ eventId, actorUid, personId, amount }) {
-  return writeBalanceChange({
+  const result = await topUpPersonBalanceCallable({
     eventId,
     actorUid,
     personId,
     amount,
-    reason: '',
-    ledgerType: LEDGER_ENTRY_TYPES.topup,
-    auditType: AUDIT_TYPES.topup,
-    summary: `Top-up applied to person ${personId}`,
   })
+
+  return result.data
 }
 
 export async function adjustPersonBalance({ eventId, actorUid, personId, amount, reason = '' }) {
