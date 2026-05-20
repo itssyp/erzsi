@@ -1100,26 +1100,26 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
     )
   }, [people])
 
-  const userAccounts = useMemo(() => {
-    return accounts.filter((account) => account.role === 'user' && account.status === 'active')
+  const activeAccounts = useMemo(() => {
+    return accounts.filter((account) => account.status === 'active')
   }, [accounts])
 
   const availableAccounts = useMemo(() => {
     const search = accountSearch.trim().toLowerCase()
     const selectedLinkedAccountId = selectedPerson?.linkedAccountId || selectedPerson?.linkedAuthUid || null
 
-    return userAccounts.filter((account) => {
+    return activeAccounts.filter((account) => {
       const isLinkedElsewhere = linkedAccountIds.has(account.uid) && account.uid !== selectedLinkedAccountId
       if (isLinkedElsewhere) return false
       if (!search) return true
-      const haystack = `${account.displayName || ''} ${account.email || ''} ${account.shibboleth || ''}`.toLowerCase()
+      const haystack = `${account.displayName || ''} ${account.email || ''} ${account.shibboleth || ''} ${account.role || ''}`.toLowerCase()
       return haystack.includes(search)
     }).slice(0, 8)
-  }, [accountSearch, linkedAccountIds, selectedPerson, userAccounts])
+  }, [accountSearch, activeAccounts, linkedAccountIds, selectedPerson])
 
   const unlinkedAccounts = useMemo(() => {
-    return userAccounts.filter((account) => !linkedAccountIds.has(account.uid))
-  }, [linkedAccountIds, userAccounts])
+    return activeAccounts.filter((account) => !linkedAccountIds.has(account.uid))
+  }, [activeAccounts, linkedAccountIds])
 
   const unassignedQrCredentials = useMemo(() => {
     return qrCredentials.filter((credential) => credential.status === QR_CREDENTIAL_STATUSES.unassigned)
@@ -1832,20 +1832,18 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
                     <button
                       key={person.id}
                       type="button"
-                      className={`record-row${selectedPersonId === person.id ? ' selected' : ''}`}
+                      className={`record-row persona-record-row${selectedPersonId === person.id ? ' selected' : ''}`}
                       onClick={() => selectPerson(person.id)}
                     >
-                      <span style={{ display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
-                        <CompletenessDot completeness={completeness} />
-                        <span>
-                          <strong>{person.displayName}</strong>
-                          <small>
-                            {getPersonDisplayId(person)}
-                            {person.team ? ` · ${person.team}` : ''}
-                          </small>
-                        </span>
+                      <CompletenessDot completeness={completeness} />
+                      <span className="persona-record-text">
+                        <strong>{person.displayName}</strong>
+                        <small>
+                          {getPersonDisplayId(person)}
+                          {person.team ? ` · ${person.team}` : ''}
+                        </small>
                       </span>
-                      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', flexShrink: 0 }}>
+                      <span className="persona-record-side">
                         <small style={{ fontWeight: 700 }}>{formatHuf(person.balance || 0)}</small>
                         <small
                           style={{
@@ -2011,20 +2009,18 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
                   <button
                     key={person.id}
                     type="button"
-                    className={`record-row${selectedPersonId === person.id ? ' selected' : ''}`}
+                    className={`record-row persona-record-row${selectedPersonId === person.id ? ' selected' : ''}`}
                     onClick={() => selectPerson(person.id, 'balance')}
                   >
-                    <span style={{ display: 'flex', alignItems: 'flex-start', gap: '7px' }}>
-                      <CompletenessDot completeness={completeness} />
-                      <span>
-                        <strong>{person.displayName}</strong>
-                        <small>
-                          {getPersonDisplayId(person)}
-                          {person.team ? ` · ${person.team}` : ''}
-                        </small>
-                      </span>
+                    <CompletenessDot completeness={completeness} />
+                    <span className="persona-record-text">
+                      <strong>{person.displayName}</strong>
+                      <small>
+                        {getPersonDisplayId(person)}
+                        {person.team ? ` · ${person.team}` : ''}
+                      </small>
                     </span>
-                    <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px', flexShrink: 0 }}>
+                    <span className="persona-record-side">
                       <small style={{ fontWeight: 700 }}>{formatHuf(person.balance || 0)}</small>
                       <small
                         style={{

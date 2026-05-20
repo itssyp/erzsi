@@ -13,6 +13,14 @@ export const PRIVILEGED_ROLES = [
   ROLES.admin,
 ]
 
+export const ALL_ROLES = [
+  ROLES.user,
+  ROLES.posStaff,
+  ROLES.topupStaff,
+  ROLES.staff,
+  ROLES.admin,
+]
+
 export function getRoleFromClaims(claims) {
   const claimedRole = claims?.role
 

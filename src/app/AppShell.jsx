@@ -84,7 +84,6 @@ export function AppShell() {
 
   const menuLinks = useMemo(() => {
     const links = []
-    if (role === 'user') links.push({ to: '/app', label: 'Saját irányítópult' })
     if (isStaffLike(role)) {
       links.push({ to: '/staff', label: 'Pult' })
       links.push({ to: '/staff/kitchen', label: 'Konyha' })
@@ -98,6 +97,7 @@ export function AppShell() {
     if (role === ROLES.admin) {
       links.push({ to: '/admin', label: 'Admin' })
     }
+    links.push({ to: '/app', label: 'Saját irányítópult' })
     return links
   }, [role])
 

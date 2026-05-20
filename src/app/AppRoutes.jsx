@@ -7,7 +7,7 @@ import {
   RequireRole,
   RoleHomeRedirect,
 } from './RouteGuards'
-import { ROLES } from '../lib/roles'
+import { ALL_ROLES, ROLES } from '../lib/roles'
 import { LoginPage } from '../features/auth/LoginPage'
 import { AdminDashboardPage } from '../features/dashboard/AdminDashboardPage'
 import { CatalogManagementPage } from '../features/dashboard/CatalogManagementPage'
@@ -42,7 +42,7 @@ export function AppRoutes() {
           <Route
             path="app"
             element={
-              <RequireRole allowedRoles={[ROLES.user]}>
+              <RequireRole allowedRoles={ALL_ROLES}>
                 <RequireActiveEvent>
                   <UserDashboardPage />
                 </RequireActiveEvent>
