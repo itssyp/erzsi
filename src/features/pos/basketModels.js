@@ -8,6 +8,45 @@ export const BASKET_STATUSES = {
 }
 
 export const DRS_RETURN_PRODUCT_ID = '__drs_return__'
+export const REUSABLE_CUP_RETURN_PRODUCT_ID = '__reusable_cup_return__'
+export const REUSABLE_CUP_RETURN_AMOUNT = 1000
+// Repohár sells are normal catalog products — no dedicated lineType. Single
+// source of truth for matching them by productName (case + diacritic tolerant).
+// Used by the POS to cap returns and by RepoharTrackerPanel / Statisztika.
+export const REUSABLE_CUP_NAME_PATTERN = /repoh[áa]r/i
+
+/**
+ * Count how many Repohár cups a person currently owes back, given an array
+ * of finalized orders for that person. Subtracts refunded units. Returns 0
+ * (never negative) so callers can use it as a strict upper bound.
+ */
+export function countReusableCupsOutstanding(orders) {
+  let bought = 0
+  let returned = 0
+  for (const order of orders || []) {
+    for (const line of order.lines || []) {
+      const netQty = (line.quantity || 0) - (line.refundedQuantity || 0)
+      if (netQty <= 0) continue
+      if (line.lineType === 'product' && REUSABLE_CUP_NAME_PATTERN.test(line.productName || '')) {
+        bought += netQty
+      } else if (line.lineType === 'reusableCupReturn') {
+        returned += netQty
+      }
+    }
+  }
+  return Math.max(0, bought - returned)
+}
+
+/** Sum of Repohár BUY quantities currently in an open basket. */
+export function countReusableCupsInBasket(basketItems) {
+  let bought = 0
+  for (const item of basketItems || []) {
+    if (item.lineType === 'product' && REUSABLE_CUP_NAME_PATTERN.test(item.productName || '')) {
+      bought += item.quantity || 0
+    }
+  }
+  return bought
+}
 
 export function computeLineUnitTotal(item) {
   const extrasUnitTotal = (item.customization?.extras || []).reduce(
@@ -151,6 +190,24 @@ export function buildDrsReturnLine() {
     unitPrice: -DRS_DEPOSIT_AMOUNT,
     unitTotal: -DRS_DEPOSIT_AMOUNT,
     lineTotal: -DRS_DEPOSIT_AMOUNT,
+    modifierTemplateId: null,
+    customization: null,
+  }
+}
+
+export function buildReusableCupReturnLine() {
+  return {
+    lineId: crypto.randomUUID(),
+    lineType: 'reusableCupReturn',
+    parentLineId: null,
+    mergeKey: `${REUSABLE_CUP_RETURN_PRODUCT_ID}::default`,
+    productId: REUSABLE_CUP_RETURN_PRODUCT_ID,
+    productName: 'Repohár visszaváltás',
+    category: 'Egyéb',
+    quantity: 1,
+    unitPrice: -REUSABLE_CUP_RETURN_AMOUNT,
+    unitTotal: -REUSABLE_CUP_RETURN_AMOUNT,
+    lineTotal: -REUSABLE_CUP_RETURN_AMOUNT,
     modifierTemplateId: null,
     customization: null,
   }

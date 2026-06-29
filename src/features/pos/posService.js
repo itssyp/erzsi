@@ -55,6 +55,66 @@ function buildLookupError(kind) {
   return new Error('Person record was not found.')
 }
 
+function buildCustomizationAuditDetails(customization) {
+  if (!customization) return null
+
+  const includedIngredients = (customization.includedIngredients || [])
+    .map((item) => item.label || item.name || item.id || '')
+    .filter(Boolean)
+  const removedIngredients = (customization.removedIngredients || [])
+    .map((item) => item.label || item.name || item.id || '')
+    .filter(Boolean)
+  const extras = (customization.extras || [])
+    .filter((item) => item.quantity > 0)
+    .map((item) => ({
+      id: item.id || null,
+      label: item.label || item.name || item.id || '',
+      quantity: item.quantity || 0,
+      price: item.price || 0,
+    }))
+  const stockSelections = (customization.stockSelections || [])
+    .map((selection) => ({
+      groupLabel: selection.groupLabel || selection.groupName || selection.groupId || '',
+      optionLabel: selection.optionLabel || selection.optionName || selection.optionId || '',
+    }))
+    .filter((selection) => selection.groupLabel || selection.optionLabel)
+
+  if (
+    includedIngredients.length === 0 &&
+    removedIngredients.length === 0 &&
+    extras.length === 0 &&
+    stockSelections.length === 0
+  ) {
+    return null
+  }
+
+  return {
+    includedIngredients,
+    removedIngredients,
+    extras,
+    stockSelections,
+  }
+}
+
+function buildOrderAuditItems(items) {
+  return items.map((item) => {
+    const auditItem = {
+      lineId: item.lineId || null,
+      lineType: item.lineType || 'product',
+      productId: item.productId || null,
+      productName: item.productName || 'Ismeretlen termék',
+      category: item.category || '',
+      quantity: item.quantity || 0,
+      unitPrice: item.unitPrice || 0,
+      unitTotal: item.unitTotal || 0,
+      lineTotal: item.lineTotal || 0,
+    }
+    const customization = buildCustomizationAuditDetails(item.customization)
+
+    return customization ? { ...auditItem, customization } : auditItem
+  })
+}
+
 export async function findPersonByQr(eventId, qrId) {
   const result = await resolveAssignedQrToPerson({
     eventId,
@@ -359,6 +419,7 @@ export async function finalizeBasket({
       {
         ...auditLogWrite.data,
         details: {
+          items: buildOrderAuditItems(basketSummary.items),
           totalAmount,
           drsReturnQuantity,
           drsReturnCreditAmount,

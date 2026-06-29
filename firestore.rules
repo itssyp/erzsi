@@ -86,6 +86,12 @@ service cloud.firestore {
         && request.resource.data.updatedBy == request.auth.uid;
     }
 
+    function validPosProductAvailabilityUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isTemporarilyUnavailable', 'updatedBy', 'updatedAt'])
+        && request.resource.data.isTemporarilyUnavailable is bool
+        && request.resource.data.updatedBy == request.auth.uid;
+    }
+
     function isOwnAccount(uid) {
       return isSignedIn() && request.auth.uid == uid;
     }
@@ -148,7 +154,8 @@ service cloud.firestore {
 
       match /products/{productId} {
         allow read: if isSignedIn();
-        allow write: if canManageCatalog();
+        allow create, delete: if canManageCatalog();
+        allow update: if canManageCatalog() || (canUsePos() && validPosProductAvailabilityUpdate());
       }
 
       match /productBarcodes/{barcode} {
@@ -174,7 +181,10 @@ service cloud.firestore {
       match /orders/{orderId} {
         allow read: if canUsePos()
           || (isLinkedUserForEvent(eventId)
-            && resource.data.personId == accountEventLink(eventId).data.personId);
+            && (
+              resource.data.personId == accountEventLink(eventId).data.personId
+              || resource.data.hasFood == true
+            ));
         allow write: if canUsePos();
       }
 

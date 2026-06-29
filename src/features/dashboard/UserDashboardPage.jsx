@@ -88,7 +88,7 @@ export function UserDashboardPage() {
   const [showQrAssign, setShowQrAssign] = useState(false)
 
   const handleQrAssignClose = useCallback(() => setShowQrAssign(false), [])
-  const { loading, person, orders, activeFoodOrder, hasLinkedPerson, error } = useUserDashboardData({
+  const { loading, person, orders, activeFoodOrder, activeFoodOrdersAhead, hasLinkedPerson, error } = useUserDashboardData({
     uid: user?.uid,
     eventId: activeEventId,
   })
@@ -190,6 +190,10 @@ export function UserDashboardPage() {
           {activeFoodOrder ? (
             <div className="user-active-order-content">
               <FoodOrderTracker status={activeFoodOrder.foodStatus || FOOD_ORDER_STATUSES.new} />
+              <div className="user-order-queue-card">
+                <span>Előtted lévő rendelések</span>
+                <strong>{activeFoodOrdersAhead}</strong>
+              </div>
               <p className="helper-text" style={{ marginTop: '16px', marginBottom: '12px' }}>
                 Rendelés ideje: {formatOrderTimestamp(activeFoodOrder.createdAt)}
               </p>

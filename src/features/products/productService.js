@@ -316,3 +316,38 @@ export async function deleteProduct({
   batch.set(auditLogWrite.ref, auditLogWrite.data)
   await batch.commit()
 }
+
+export async function updateProductTemporaryAvailability({
+  eventId,
+  actorUid,
+  productId,
+  productName,
+  isTemporarilyUnavailable,
+}) {
+  const batch = writeBatch(db)
+  const targetRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.products, productId))
+  const auditLogWrite = createAuditLogWrite({
+    eventId,
+    type: AUDIT_TYPES.productChange,
+    actorUid,
+    summary: `${isTemporarilyUnavailable ? 'Marked unavailable' : 'Marked available'} product ${productName}`,
+    targetType: 'product',
+    targetId: productId,
+    details: {
+      isTemporarilyUnavailable,
+      source: 'posLongPress',
+    },
+  })
+
+  batch.set(
+    targetRef,
+    {
+      isTemporarilyUnavailable,
+      updatedAt: serverTimestamp(),
+      updatedBy: actorUid,
+    },
+    { merge: true },
+  )
+  batch.set(auditLogWrite.ref, auditLogWrite.data)
+  await batch.commit()
+}

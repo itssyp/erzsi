@@ -72,6 +72,54 @@ function buildReadableSummary(log, peopleById) {
   return log.summary.replaceAll(log.personId, person.displayName)
 }
 
+function formatHuf(value) {
+  return `${Number(value || 0).toLocaleString('hu-HU')} HUF`
+}
+
+function getOrderAuditItems(log) {
+  if (log.type !== AUDIT_TYPES.orderFinalization) return []
+  return Array.isArray(log.details?.items) ? log.details.items : []
+}
+
+function buildAuditItemCustomizationLabel(customization) {
+  if (!customization) return ''
+
+  const parts = []
+  const removedIngredients = customization.removedIngredients || []
+  const extras = customization.extras || []
+  const stockSelections = customization.stockSelections || []
+
+  if (removedIngredients.length > 0) {
+    parts.push(`nélküle: ${removedIngredients.join(', ')}`)
+  }
+
+  const extraLabels = extras
+    .filter((extra) => extra.quantity > 0)
+    .map((extra) => `${extra.quantity}x ${extra.label || extra.id}`)
+  if (extraLabels.length > 0) {
+    parts.push(`extra: ${extraLabels.join(', ')}`)
+  }
+
+  const selectionLabels = stockSelections
+    .map((selection) => [selection.groupLabel, selection.optionLabel].filter(Boolean).join(': '))
+    .filter(Boolean)
+  if (selectionLabels.length > 0) {
+    parts.push(selectionLabels.join(', '))
+  }
+
+  return parts.join(' · ')
+}
+
+function buildOrderItemsSearchText(log) {
+  return getOrderAuditItems(log)
+    .map((item) => [
+      item.productName,
+      item.category,
+      buildAuditItemCustomizationLabel(item.customization),
+    ].filter(Boolean).join(' '))
+    .join(' ')
+}
+
 function formatTargetLabel(log, peopleById) {
   if (log.personId) return buildPersonLabel(log.personId, peopleById)
   if (log.targetType && log.targetId) return `${log.targetType}: ${log.targetId}`
@@ -88,8 +136,52 @@ function buildSearchText(log, peopleById, accountsById) {
     buildPersonLabel(log.personId, peopleById),
     log.targetType,
     log.targetId,
+    buildOrderItemsSearchText(log),
     formatTimestamp(log.createdAt),
   ].filter(Boolean).join(' ').toLowerCase()
+}
+
+function OrderFinalizationItems({ log, isExpanded, onToggle }) {
+  const items = getOrderAuditItems(log)
+
+  if (items.length === 0) return null
+
+  const totalQuantity = items.reduce((sum, item) => sum + (item.quantity || 0), 0)
+  const totalAmount = items.reduce((sum, item) => sum + (item.lineTotal || 0), 0)
+
+  return (
+    <div className="audit-order-products">
+      <button
+        type="button"
+        className="audit-order-toggle"
+        onClick={onToggle}
+        aria-expanded={isExpanded}
+      >
+        <span>{isExpanded ? 'Elrejtés' : 'Termékek'}</span>
+        <strong>{totalQuantity} db</strong>
+        <span>{formatHuf(totalAmount)}</span>
+      </button>
+      {isExpanded ? (
+        <div className="audit-order-items" aria-label="Eladott termékek">
+          {items.map((item, index) => {
+            const customizationLabel = buildAuditItemCustomizationLabel(item.customization)
+            const key = item.lineId || `${item.productId || item.productName}-${index}`
+
+            return (
+              <div key={key} className="audit-order-item">
+                <div className="audit-order-item-main">
+                  <span className="audit-order-item-qty">{item.quantity || 0}x</span>
+                  <span className="audit-order-item-name">{item.productName || 'Ismeretlen termék'}</span>
+                </div>
+                <span className="audit-order-item-price">{formatHuf(item.lineTotal)}</span>
+                {customizationLabel ? <span className="audit-order-item-meta">{customizationLabel}</span> : null}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function getEventStatus(event, activeEventId) {
@@ -125,6 +217,7 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
   const [refundConfirmId, setRefundConfirmId] = useState(null)
   const [refundPendingId, setRefundPendingId] = useState(null)
   const [refundError, setRefundError] = useState(null)
+  const [expandedOrderLogIds, setExpandedOrderLogIds] = useState(() => new Set())
 
   const eventId = showEventSelector ? selectedEventId : defaultEventId
 
@@ -188,6 +281,18 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
   const visibleLogs = filteredLogs.slice((currentPage - 1) * pageSize, currentPage * pageSize)
 
   useEffect(() => { setPage(1) }, [pageSize, searchQuery, typeFilter, eventId])
+
+  function toggleOrderLogProducts(logId) {
+    setExpandedOrderLogIds((current) => {
+      const next = new Set(current)
+      if (next.has(logId)) {
+        next.delete(logId)
+      } else {
+        next.add(logId)
+      }
+      return next
+    })
+  }
 
   return (
     <div className="admin-section">
@@ -333,6 +438,13 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
                           <span className="audit-trail-target">{targetLabel}</span>
                         ) : null}
                       </div>
+                      {isOrderLog ? (
+                        <OrderFinalizationItems
+                          log={log}
+                          isExpanded={expandedOrderLogIds.has(log.id)}
+                          onToggle={() => toggleOrderLogProducts(log.id)}
+                        />
+                      ) : null}
                     </div>
                   </article>
                 )

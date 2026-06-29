@@ -203,7 +203,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
     <div
       className={isFullscreen ? 'kds-fullscreen-shell' : ''}
       ref={boardRef}
-      style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}
+      style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}
     >
       {errorMessage ? <div className="error-banner" style={{ margin: '10px 16px 0', flexShrink: 0 }}>{errorMessage}</div> : null}
 

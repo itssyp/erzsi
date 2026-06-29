@@ -7,7 +7,7 @@ import { PERSON_RECORD_STATUSES, subscribeToPeople } from '../people/personServi
 import { QR_CODE_LENGTH, normalizeQrInput } from '../qr/qrLinks'
 import { useQrScanner } from '../qr/useQrScanner'
 import { usePosSession } from './usePosSession'
-import { PRODUCT_CATEGORIES, subscribeToProducts } from '../products/productService'
+import { PRODUCT_CATEGORIES, subscribeToProducts, updateProductTemporaryAvailability } from '../products/productService'
 import { isFoodCategory, normalizeProductCategory } from '../products/productModels'
 import { tryNormalizeProductBarcode } from '../products/productBarcodes'
 import { getPersonDisplayId } from '../people/personModels'
@@ -21,18 +21,25 @@ import {
 } from './posService'
 import {
   DRS_RETURN_PRODUCT_ID,
+  REUSABLE_CUP_RETURN_AMOUNT,
+  REUSABLE_CUP_RETURN_PRODUCT_ID,
   buildBasketLine,
   buildBasketLineMergeKey,
   buildDrsLine,
   buildDrsReturnLine,
+  buildReusableCupReturnLine,
+  countReusableCupsInBasket,
+  countReusableCupsOutstanding,
   summarizeBasketItems,
 } from './basketModels'
+import { subscribeOrdersForPerson } from '../orders/orderService'
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { useKitchenWorkload } from '../kitchen/useKitchenWorkload'
 import { useActiveEvent } from '../events/useActiveEvent'
 import { BurgerCatchGame } from './BurgerCatchGame'
 
 const MISC_CATEGORY = 'Egyéb'
+const PRODUCT_AVAILABILITY_LONG_PRESS_MS = 650
 const DRS_RETURN_PRODUCT = Object.freeze({
   id: DRS_RETURN_PRODUCT_ID,
   name: 'Palack visszaváltás',
@@ -40,6 +47,16 @@ const DRS_RETURN_PRODUCT = Object.freeze({
   price: -DRS_DEPOSIT_AMOUNT,
   isActive: true,
   isDrsReturn: true,
+  isCreditReturn: true,
+})
+const REUSABLE_CUP_RETURN_PRODUCT = Object.freeze({
+  id: REUSABLE_CUP_RETURN_PRODUCT_ID,
+  name: 'Repohár visszaváltás',
+  category: MISC_CATEGORY,
+  price: -REUSABLE_CUP_RETURN_AMOUNT,
+  isActive: true,
+  isReusableCupReturn: true,
+  isCreditReturn: true,
 })
 // PRODUCT_CATEGORIES already includes MISC_CATEGORY ('Egyéb'); dedupe defensively
 // so this list remains correct even if either constant is reordered later.
@@ -127,7 +144,28 @@ const PIZZA_LAYER_ORDER = Object.freeze({
   ham:        4,
   mushroom:   5,
   corn:       6,
+  generic:    8,
 })
+const PIZZA_GENERIC_TOPPING_POSITIONS = Object.freeze([
+  { left: '38%', top: '27%' },
+  { left: '58%', top: '30%' },
+  { left: '30%', top: '47%' },
+  { left: '67%', top: '51%' },
+  { left: '48%', top: '63%' },
+  { left: '42%', top: '42%' },
+  { left: '58%', top: '66%' },
+  { left: '68%', top: '38%' },
+  { left: '29%', top: '62%' },
+])
+const PIZZA_GENERIC_TOPPING_COLORS = Object.freeze([
+  '#b91c1c',
+  '#eab308',
+  '#15803d',
+  '#c2410c',
+  '#7c2d12',
+  '#be185d',
+  '#4d7c0f',
+])
 
 function CameraIcon() {
   return (
@@ -241,25 +279,71 @@ function getPizzaSpriteKind(label) {
   return match?.kind || null
 }
 
+function getPizzaGenericToppingStyle(label, index) {
+  const normalizedLabel = normalizeIngredientLabel(label)
+  const hash = Array.from(normalizedLabel).reduce(
+    (sum, character) => sum + character.charCodeAt(0),
+    index,
+  )
+  const position = PIZZA_GENERIC_TOPPING_POSITIONS[index % PIZZA_GENERIC_TOPPING_POSITIONS.length]
+  const background = PIZZA_GENERIC_TOPPING_COLORS[hash % PIZZA_GENERIC_TOPPING_COLORS.length]
+
+  return { ...position, background }
+}
+
+function getPizzaLayerOrder(layer) {
+  const baseOrder = PIZZA_LAYER_ORDER[layer.spriteKind] ?? 99
+  return layer.source === 'extra' ? baseOrder + 0.5 : baseOrder
+}
+
 function getPizzaLayerState(template, customizationState) {
-  const toppings = []
+  const visualToppings = []
+  const knownToppings = []
   const unknownIngredients = []
 
-  ;(template.defaultIncludedIngredients || []).forEach((ingredient) => {
+  ;(template.defaultIncludedIngredients || []).forEach((ingredient, index) => {
     const spriteKind = getPizzaSpriteKind(ingredient.label)
     const entry = {
       ...ingredient,
-      spriteKind,
+      spriteKind: spriteKind || 'generic',
       source: 'default',
       included: customizationState?.includedIngredientIds.has(ingredient.id) || false,
     }
-    if (spriteKind) toppings.push(entry)
-    else unknownIngredients.push(entry)
+    if (spriteKind) {
+      knownToppings.push(entry)
+      visualToppings.push(entry)
+    } else {
+      const fallbackEntry = {
+        ...entry,
+        genericStyle: getPizzaGenericToppingStyle(ingredient.label, index),
+      }
+      unknownIngredients.push(fallbackEntry)
+      visualToppings.push(fallbackEntry)
+    }
   })
 
-  toppings.sort((a, b) => (PIZZA_LAYER_ORDER[a.spriteKind] ?? 99) - (PIZZA_LAYER_ORDER[b.spriteKind] ?? 99))
+  ;(customizationState?.extras || []).forEach((extra, extraIndex) => {
+    if (extra.quantity <= 0) return
 
-  return { toppings, unknownIngredients }
+    const spriteKind = getPizzaSpriteKind(extra.label)
+    for (let index = 0; index < extra.quantity; index += 1) {
+      const visualIndex = (template.defaultIncludedIngredients || []).length + extraIndex + index
+      visualToppings.push({
+        ...extra,
+        id: `${extra.id}-${index}`,
+        originalId: extra.id,
+        quantity: 1,
+        spriteKind: spriteKind || 'generic',
+        genericStyle: spriteKind ? undefined : getPizzaGenericToppingStyle(extra.label, visualIndex),
+        source: 'extra',
+        included: true,
+      })
+    }
+  })
+
+  visualToppings.sort((a, b) => getPizzaLayerOrder(a) - getPizzaLayerOrder(b))
+
+  return { visualToppings, knownToppings, unknownIngredients }
 }
 
 function getGyrosLayerState(template, customizationState) {
@@ -523,17 +607,31 @@ function GyrosCustomizer({ template, customizationState, onToggleIngredient, onR
   )
 }
 
-function PizzaCustomizer({ template, customizationState, onToggleIngredient, extrasContent }) {
-  const { toppings, unknownIngredients } = getPizzaLayerState(template, customizationState)
+function PizzaCustomizer({ template, customizationState, onToggleIngredient, onRemoveExtraLayer, extrasContent }) {
+  const { visualToppings, knownToppings, unknownIngredients } = getPizzaLayerState(template, customizationState)
 
   return (
     <div className="pizza-customizer">
       <div className="pizza-stage" aria-label="Pizza összetevők">
         <div className="pizza-visual">
-          {toppings.map((topping) => (
+          {visualToppings.map((topping) => (
             <div
               key={topping.id}
               className={`pizza-topping pizza-topping--${topping.spriteKind}${topping.included ? '' : ' is-removed'}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`${topping.label} ${topping.source === 'extra' ? 'extra eltávolítása' : 'ki- vagy bekapcsolása'}`}
+              onClick={() => {
+                if (topping.source === 'extra') onRemoveExtraLayer(topping.originalId)
+                else onToggleIngredient(topping.id)
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault()
+                if (topping.source === 'extra') onRemoveExtraLayer(topping.originalId)
+                else onToggleIngredient(topping.id)
+              }}
+              style={topping.genericStyle || undefined}
             />
           ))}
         </div>
@@ -542,7 +640,7 @@ function PizzaCustomizer({ template, customizationState, onToggleIngredient, ext
       <div className="pizza-chip-panel burger-chip-panel">
         <span className="burger-chip-panel-title">Feltétek</span>
         <div className="burger-chip-row">
-          {[...toppings, ...unknownIngredients].map((ingredient) => (
+          {[...knownToppings, ...unknownIngredients].map((ingredient) => (
             <IngredientToggleChip
               key={ingredient.id}
               ingredient={ingredient}
@@ -602,25 +700,70 @@ function buildPersonSearchText(person) {
     .toLowerCase()
 }
 
-const ProductTile = memo(({ product, onClick, disabled }) => (
-  <button
-    type="button"
-    className={`product-tile${product.isTemporarilyUnavailable ? ' unavailable' : ''}${product.isDrsReturn ? ' credit' : ''}`}
-    onClick={() => onClick(product)}
-    disabled={disabled || product.isTemporarilyUnavailable}
-  >
-    <strong style={{ fontSize: '0.9rem', fontWeight: 700 }}>{product.name}</strong>
-    <span style={{ fontSize: '0.7rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
-      {product.category}
-    </span>
-    {product.isTemporarilyUnavailable ? (
-      <span className="product-tile-status">TNA</span>
-    ) : null}
-    <span style={{ fontWeight: 800, color: 'var(--primary)', fontSize: '0.95rem', marginTop: 'auto' }}>
-      {formatHuf(product.price)}
-    </span>
-  </button>
-))
+const ProductTile = memo(({ product, onClick, onLongPress, disabled, clickDisabled }) => {
+  const longPressTimerRef = useRef(null)
+  const longPressTriggeredRef = useRef(false)
+  const supportsAvailabilityToggle = !product.isCreditReturn && !product.isDrsReturn && !product.isReusableCupReturn
+
+  function clearLongPressTimer() {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+  }
+
+  function handlePointerDown(event) {
+    if (disabled || !supportsAvailabilityToggle) return
+    longPressTriggeredRef.current = false
+    clearLongPressTimer()
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTriggeredRef.current = true
+      onLongPress(product, { x: event.clientX, y: event.clientY })
+    }, PRODUCT_AVAILABILITY_LONG_PRESS_MS)
+  }
+
+  function handlePointerEnd() {
+    clearLongPressTimer()
+  }
+
+  function handleClick(event) {
+    if (longPressTriggeredRef.current) {
+      event.preventDefault()
+      longPressTriggeredRef.current = false
+      return
+    }
+    if (clickDisabled || product.isTemporarilyUnavailable) {
+      event.preventDefault()
+      return
+    }
+    onClick(product)
+  }
+
+  return (
+    <button
+      type="button"
+      className={`product-tile${product.isTemporarilyUnavailable ? ' unavailable' : ''}${product.isCreditReturn ? ' credit' : ''}`}
+      onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
+      onPointerLeave={handlePointerEnd}
+      disabled={disabled}
+      aria-disabled={clickDisabled || product.isTemporarilyUnavailable}
+    >
+      <strong style={{ fontSize: '0.9rem', fontWeight: 700 }}>{product.name}</strong>
+      <span style={{ fontSize: '0.7rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+        {product.category}
+      </span>
+      {product.isTemporarilyUnavailable ? (
+        <span className="product-tile-status">TNA</span>
+      ) : null}
+      <span style={{ fontWeight: 800, color: 'var(--primary)', fontSize: '0.95rem', marginTop: 'auto' }}>
+        {formatHuf(product.price)}
+      </span>
+    </button>
+  )
+})
 
 export function StaffPosPanel({ eventId }) {
   const { user, account } = useAuth()
@@ -631,6 +774,7 @@ export function StaffPosPanel({ eventId }) {
   const [products, setProducts] = useState([])
   const [modifierTemplates, setModifierTemplates] = useState([])
   const [selectedPerson, setSelectedPerson] = useState(null)
+  const [selectedPersonOrders, setSelectedPersonOrders] = useState([])
   const [switchTargetPerson, setSwitchTargetPerson] = useState(null)
   const [basketItems, setBasketItems] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
@@ -645,6 +789,10 @@ export function StaffPosPanel({ eventId }) {
   const [spritzerGuideOpen, setSpritzerGuideOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
+  const [availabilityProduct, setAvailabilityProduct] = useState(null)
+  const [availabilityAnchor, setAvailabilityAnchor] = useState(null)
+  const [availabilityPending, setAvailabilityPending] = useState(false)
+  const availabilityModalRef = useRef(null)
   const [selectionPending, setSelectionPending] = useState(false)
   const [finalizePending, setFinalizePending] = useState(false)
   const [cancelPending, setCancelPending] = useState(false)
@@ -675,6 +823,18 @@ export function StaffPosPanel({ eventId }) {
     canFinalize: false,
     isSyncing: false,
   })
+
+  useEffect(() => {
+    if (!availabilityProduct || availabilityPending) return () => {}
+
+    function handlePointerDown(event) {
+      if (availabilityModalRef.current?.contains(event.target)) return
+      closeAvailabilityPopover()
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
+  }, [availabilityPending, availabilityProduct])
 
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const sessionId = useMemo(() => getStaffSessionId(), [])
@@ -715,6 +875,23 @@ export function StaffPosPanel({ eventId }) {
     return subscribeToModifierTemplates(eventId, setModifierTemplates, (error) => setErrorMessage(error.message))
   }, [eventId])
 
+  // Live feed of the currently selected person's finalized orders. Used to cap
+  // Repohár returns at "max cups they still owe back" — preventing accidental
+  // refund-fraud where staff click the visszaváltás tile more than the person
+  // has cups in hand.
+  useEffect(() => {
+    if (!selectedPerson?.id) {
+      setSelectedPersonOrders([])
+      return undefined
+    }
+    return subscribeOrdersForPerson(
+      eventId,
+      selectedPerson.id,
+      setSelectedPersonOrders,
+      () => {}, /* swallow — POS keeps working without history */
+    )
+  }, [eventId, selectedPerson?.id])
+
   useEffect(() => {
     if (!spritzerGuideOpen) return undefined
 
@@ -750,10 +927,16 @@ export function StaffPosPanel({ eventId }) {
       .map((product) => {
         const normalizedCategory = normalizeProductCategory(product.category)
         const isFood = isFoodCategory(normalizedCategory)
+        const catalogTemporarilyUnavailable = Boolean(product.isTemporarilyUnavailable)
         if (isFood && activeEvent?.isKitchenClosed) {
-          return { ...product, category: normalizedCategory, isTemporarilyUnavailable: true }
+          return {
+            ...product,
+            category: normalizedCategory,
+            catalogTemporarilyUnavailable,
+            isTemporarilyUnavailable: true,
+          }
         }
-        return { ...product, category: normalizedCategory }
+        return { ...product, category: normalizedCategory, catalogTemporarilyUnavailable }
       })
       .sort((left, right) => {
         const leftCategoryIndex = PRODUCT_CATEGORIES.indexOf(left.category)
@@ -778,10 +961,11 @@ export function StaffPosPanel({ eventId }) {
         return [
           ...visibleProducts.slice(0, firstMiscIdx),
           DRS_RETURN_PRODUCT,
+          REUSABLE_CUP_RETURN_PRODUCT,
           ...visibleProducts.slice(firstMiscIdx),
         ]
       }
-      return [...visibleProducts, DRS_RETURN_PRODUCT]
+      return [...visibleProducts, DRS_RETURN_PRODUCT, REUSABLE_CUP_RETURN_PRODUCT]
     }
     return visibleProducts
   }, [products, selectedCategory, activeEvent?.isKitchenClosed])
@@ -806,11 +990,13 @@ export function StaffPosPanel({ eventId }) {
       .filter((product) => product.isActive)
       .forEach((product) => {
         const normalizedCategory = normalizeProductCategory(product.category)
+        const catalogTemporarilyUnavailable = Boolean(product.isTemporarilyUnavailable)
         const isUnavailable = Boolean(product.isTemporarilyUnavailable)
           || (isFoodCategory(normalizedCategory) && activeEvent?.isKitchenClosed)
         const normalizedProduct = {
           ...product,
           category: normalizedCategory,
+          catalogTemporarilyUnavailable,
           isTemporarilyUnavailable: isUnavailable,
         }
 
@@ -840,6 +1026,23 @@ export function StaffPosPanel({ eventId }) {
     ),
   )
   const productsPaymentBlocked = shouldWarnDoNotServe
+
+  // Repohár return cap: finalized cups outstanding for this person, MINUS the
+  // returns already staged in the open basket. Also adds back any Repohár
+  // buys staged in the same basket so a buy + return in one go still works.
+  const repoharOutstandingFinalized = useMemo(
+    () => countReusableCupsOutstanding(selectedPersonOrders),
+    [selectedPersonOrders],
+  )
+  const repoharLimit = useMemo(() => {
+    const inBasketBought = countReusableCupsInBasket(basketItems)
+    const inBasketReturned = basketItems
+      .filter((item) => item.lineType === 'reusableCupReturn')
+      .reduce((sum, item) => sum + (item.quantity || 0), 0)
+    // Max additional return units that can still be added.
+    return Math.max(0, repoharOutstandingFinalized + inBasketBought - inBasketReturned)
+  }, [basketItems, repoharOutstandingFinalized])
+
   const customizationIsBurgerVisual = Boolean(
     customizingProduct
     && customizationState
@@ -1004,7 +1207,7 @@ export function StaffPosPanel({ eventId }) {
       return true
     }
 
-    if (productsPaymentBlocked && !product.isDrsReturn && (product.price || 0) > 0) {
+    if (productsPaymentBlocked && !product.isCreditReturn && (product.price || 0) > 0) {
       setErrorMessage('Ne szolgald ki: a vendeg egyenlege nem engedi a vasarlast.')
       return true
     }
@@ -1424,13 +1627,27 @@ export function StaffPosPanel({ eventId }) {
     }
 
     const currentItems = latestBasketItemsRef.current
-    if (product.isDrsReturn) {
-      const existingReturnIndex = currentItems.findIndex((item) => item.lineType === 'drsReturn')
+    if (product.isDrsReturn || product.isReusableCupReturn) {
+      // For Repohár returns: refuse to add more than the person actually owes.
+      if (product.isReusableCupReturn && repoharLimit <= 0) {
+        setErrorMessage(
+          repoharOutstandingFinalized === 0
+            ? 'Ez a vendég nem vett repohárt — nincs mit visszaváltani.'
+            : 'Minden repohárt visszaváltottak már — nem váltható vissza több.',
+        )
+        return
+      }
+
+      const targetLineType = product.isReusableCupReturn ? 'reusableCupReturn' : 'drsReturn'
+      const existingReturnIndex = currentItems.findIndex((item) => item.lineType === targetLineType)
       const nextItems = existingReturnIndex >= 0
         ? currentItems.map((item, index) => (
             index === existingReturnIndex ? { ...item, quantity: item.quantity + 1 } : item
           ))
-        : [...currentItems, buildDrsReturnLine()]
+        : [
+            ...currentItems,
+            product.isReusableCupReturn ? buildReusableCupReturnLine() : buildDrsReturnLine(),
+          ]
 
       applyOptimisticBasketItems(nextItems)
       return
@@ -1467,10 +1684,10 @@ export function StaffPosPanel({ eventId }) {
       }
       applyOptimisticBasketItems(nextItems)
     }
-  }, [applyOptimisticBasketItems])
+  }, [applyOptimisticBasketItems, repoharLimit, repoharOutstandingFinalized])
 
   const startCustomization = useCallback((product) => {
-    if (productsPaymentBlocked && !product.isDrsReturn && (product.price || 0) > 0) {
+    if (productsPaymentBlocked && !product.isCreditReturn && (product.price || 0) > 0) {
       return
     }
 
@@ -1501,6 +1718,53 @@ export function StaffPosPanel({ eventId }) {
   }, [modifierTemplates, addItemToBasket, funModeActive, productsPaymentBlocked])
 
   startCustomizationRef.current = startCustomization
+
+  function openAvailabilityPopover(product, point) {
+    setAvailabilityProduct(product)
+    setAvailabilityAnchor(point || null)
+  }
+
+  function closeAvailabilityPopover() {
+    setAvailabilityProduct(null)
+    setAvailabilityAnchor(null)
+  }
+
+  function getAvailabilityPopoverStyle() {
+    if (!availabilityAnchor || typeof window === 'undefined') return undefined
+    const modalWidth = Math.min(300, window.innerWidth - 28)
+    const halfWidth = modalWidth / 2
+    const minX = halfWidth + 14
+    const maxX = window.innerWidth - halfWidth - 14
+    const minY = 70
+    const maxY = window.innerHeight - 70
+    const x = minX <= maxX
+      ? Math.min(Math.max(minX, availabilityAnchor.x), maxX)
+      : window.innerWidth / 2
+    const y = minY <= maxY
+      ? Math.min(Math.max(minY, availabilityAnchor.y), maxY)
+      : window.innerHeight / 2
+    return { left: x, top: y }
+  }
+
+  async function handleSetAvailability(isTemporarilyUnavailable) {
+    if (!availabilityProduct || !user?.uid) return
+    setAvailabilityPending(true)
+    setErrorMessage('')
+    try {
+      await updateProductTemporaryAvailability({
+        eventId,
+        actorUid: user.uid,
+        productId: availabilityProduct.id,
+        productName: availabilityProduct.name,
+        isTemporarilyUnavailable,
+      })
+      closeAvailabilityPopover()
+    } catch (error) {
+      setErrorMessage(error.message)
+    } finally {
+      setAvailabilityPending(false)
+    }
+  }
 
   function handleConfirmCustomization() {
     if (!customizingProduct || !customizationState) return
@@ -1559,7 +1823,23 @@ export function StaffPosPanel({ eventId }) {
           return item
         }
         const updated = updater(item)
-        return { ...updated, quantity: Math.max(0, updated.quantity) }
+        let nextQuantity = Math.max(0, updated.quantity)
+        // Repohár return line: never let it exceed the person's outstanding
+        // cup balance (finalized buys − finalized returns + any in-basket buys).
+        if (item.lineType === 'reusableCupReturn' && nextQuantity > item.quantity) {
+          const currentReturn = item.quantity || 0
+          const headroom = repoharLimit /* additional units allowed beyond current */
+          const cap = currentReturn + headroom
+          if (nextQuantity > cap) {
+            nextQuantity = cap
+            setErrorMessage(
+              repoharOutstandingFinalized === 0
+                ? 'Ez a vendég nem vett repohárt — nincs mit visszaváltani.'
+                : 'Minden repohárt visszaváltottak már — nem váltható vissza több.',
+            )
+          }
+        }
+        return { ...updated, quantity: nextQuantity }
       })
       .map((item, _, allItems) => {
         if (item.lineType === 'drs') {
@@ -1846,13 +2126,15 @@ export function StaffPosPanel({ eventId }) {
             {displayedBasketSummary.items.map((item) => {
               const isDrsLine = item.lineType === 'drs'
               const isDrsReturnLine = item.lineType === 'drsReturn'
+              const isReusableCupReturnLine = item.lineType === 'reusableCupReturn'
+              const isCreditReturnLine = isDrsReturnLine || isReusableCupReturnLine
               const removedIngredients = item.customization?.removedIngredients || []
               const extraIngredients = (item.customization?.extras || []).filter((e) => e.quantity > 0)
               const hasCustomization = removedIngredients.length > 0 || extraIngredients.length > 0
               return (
                 <div key={item.lineId} className="receipt-line-group">
                   <div
-                    className={`receipt-line${isDrsLine ? ' receipt-line-drs' : ''}${isDrsReturnLine ? ' receipt-line-credit' : ''}`}
+                    className={`receipt-line${isDrsLine ? ' receipt-line-drs' : ''}${isCreditReturnLine ? ' receipt-line-credit' : ''}`}
                   >
                     <span
                       className="receipt-item-name"
@@ -2016,7 +2298,7 @@ export function StaffPosPanel({ eventId }) {
           <div className="product-grid-scroll">
           <div
             className="product-category-list"
-            style={{ opacity: productsDisabled ? 0.45 : 1, pointerEvents: productsDisabled ? 'none' : 'auto' }}
+            style={{ opacity: productsDisabled ? 0.45 : 1 }}
           >
             {groupedProducts.map((group) => (
               <section key={group.category} className="product-category-section">
@@ -2042,7 +2324,14 @@ export function StaffPosPanel({ eventId }) {
                       key={product.id}
                       product={product}
                       onClick={startCustomization}
-                      disabled={productsDisabled || (productsPaymentBlocked && !product.isDrsReturn && (product.price || 0) > 0)}
+                      onLongPress={openAvailabilityPopover}
+                      disabled={blockingBasketAction}
+                      /* Repohár visszaváltás at limit stays clickable on purpose
+                         — the tap fires the error banner via addItemToBasket. */
+                      clickDisabled={
+                        productsDisabled
+                        || (productsPaymentBlocked && !product.isCreditReturn && (product.price || 0) > 0)
+                      }
                     />
                   ))}
                 </div>
@@ -2051,6 +2340,45 @@ export function StaffPosPanel({ eventId }) {
           </div>
           </div>
         </div>
+
+        {availabilityProduct ? (
+          <>
+            <div
+              className="modal-backdrop pos-availability-backdrop"
+              onClick={() => {
+                if (!availabilityPending) closeAvailabilityPopover()
+              }}
+            />
+            <div
+              ref={availabilityModalRef}
+              className="pos-availability-modal floating-overlay"
+              style={getAvailabilityPopoverStyle()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="posAvailabilityTitle"
+            >
+              <h4 id="posAvailabilityTitle">{availabilityProduct.name}</h4>
+              <div className="pos-availability-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => handleSetAvailability(false)}
+                  disabled={availabilityPending}
+                >
+                  Elérhető
+                </button>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => handleSetAvailability(true)}
+                  disabled={availabilityPending}
+                >
+                  {availabilityPending ? 'Mentés...' : 'Elfogyott'}
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
 
         {spritzerGuideOpen && (
           <>
@@ -2148,6 +2476,7 @@ export function StaffPosPanel({ eventId }) {
                       template={customizingProduct.template}
                       customizationState={customizationState}
                       onToggleIngredient={toggleCustomizationIngredient}
+                      onRemoveExtraLayer={(extraId) => adjustCustomizationExtraQuantity(extraId, -1)}
                       extrasContent={(
                         <CustomizationExtras
                           extras={customizationState?.extras}

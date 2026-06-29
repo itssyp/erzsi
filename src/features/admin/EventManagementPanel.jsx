@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { StatusCard } from '../../components/StatusCard'
 import { formatHuf } from '../../lib/money'
 import { normalizeShibboleth } from '../../lib/normalize'
-import { EventStatisticsPanel } from './EventStatisticsPanel'
 import { useEventArchiveData } from './useEventArchiveData'
 import { PERSON_RECORD_STATUSES } from '../people/personModels'
 import {
@@ -213,7 +212,6 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
     orders,
     ledgerEntries,
     error: selectedEventError,
-    stats,
   } = useEventArchiveData(selectedEventId)
 
   useEffect(() => {
@@ -620,8 +618,6 @@ export function EventManagementPanel({ activeEventId, actorUid }) {
                 ) : null}
               </section>
 
-              {/* Statistics */}
-              <EventStatisticsPanel event={selectedEvent} loading={selectedEventLoading} stats={stats} />
             </>
 
           ) : (
