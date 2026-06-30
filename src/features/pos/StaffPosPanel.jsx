@@ -35,6 +35,11 @@ import {
 import { subscribeOrdersForPerson } from '../orders/orderService'
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { useKitchenWorkload } from '../kitchen/useKitchenWorkload'
+import {
+  BURGER_TRIGGER_PATTERN,
+  GYROS_TRIGGER_PATTERN,
+  PIZZA_TRIGGER_PATTERN,
+} from '../kitchen/kitchenStations'
 import { useActiveEvent } from '../events/useActiveEvent'
 import { BurgerCatchGame } from './BurgerCatchGame'
 
@@ -79,8 +84,8 @@ const SPRITZER_GUIDE = Object.freeze([
   { name: 'Sportfröccs', ratio: '1:4', wineDl: 1, sodaDl: 4 },
   { name: 'Viceházmester', ratio: '2:3', wineDl: 2, sodaDl: 3 },
 ])
-const BURGER_TRIGGER_PATTERN = /\b(?:ham)?burger\b/i
-const GYROS_TRIGGER_PATTERN  = /\bgyros\b/i
+// BURGER_TRIGGER_PATTERN / GYROS_TRIGGER_PATTERN now imported from kitchenStations
+// (single source of truth — also drives kitchen-side ticket splitting).
 const BURGER_SPRITE_KEYWORDS = Object.freeze([
   { kind: 'patty', keywords: ['hus', 'hús', 'pogi', 'pogacsa', 'pogácsa', 'patty', 'meat'] },
   { kind: 'cheese', keywords: ['sajt', 'cheese', 'cheddar'] },
@@ -127,7 +132,7 @@ const GYROS_LAYER_ORDER = Object.freeze({
   gyrosmeat: 30,
 })
 
-const PIZZA_TRIGGER_PATTERN  = /\bpizza\b/i
+// PIZZA_TRIGGER_PATTERN now imported from kitchenStations (see above).
 const PIZZA_SPRITE_KEYWORDS = Object.freeze([
   { kind: 'pizzasauce', keywords: ['paradicsomszosz', 'paradicsomszósz', 'pizza szosz', 'alap szosz', 'szosz', 'szósz', 'sauce'] },
   { kind: 'mozzarella', keywords: ['mozzarella', 'sajt', 'cheese'] },

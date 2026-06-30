@@ -87,15 +87,33 @@ export function subscribeOrder(eventId, orderId, onNext, onError) {
   )
 }
 
+/**
+ * Advance a kitchen ticket's status.
+ *
+ * `station` is required. The transaction updates the per-station status map
+ * and recomputes the legacy single `foodStatus` field (least-advanced across
+ * all stations the order touched) so consumers that haven't been split-aware
+ * yet — useKitchenWorkload, the POS workload mini-widget, subscribeFoodOrders
+ * — keep working.
+ *
+ * For orders that pre-date the split feature and don't have foodStatusByStation
+ * yet, the transaction synthesizes the map from the order's current foodStatus
+ * (every station present in the order shares the same starting status) so the
+ * first per-station write doesn't lose track of the others.
+ */
 export async function updateFoodOrderStatus({
   eventId,
   orderId,
+  station,
   nextStatus,
   actorUid,
   actorName,
 }) {
   if (!Object.values(FOOD_ORDER_STATUSES).includes(nextStatus)) {
     throw new Error('Invalid food order status.')
+  }
+  if (!station || typeof station !== 'string') {
+    throw new Error('Station is required for kitchen status updates.')
   }
 
   const orderRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.orders, orderId))
@@ -113,30 +131,63 @@ export async function updateFoodOrderStatus({
       throw new Error('Only food orders can be updated in the kitchen queue.')
     }
 
-    const currentStatus = order.foodStatus || FOOD_ORDER_STATUSES.new
+    // Lazy fallback: synthesize the per-station map for orders created before
+    // the split feature shipped. We iterate lines client-side and classify
+    // each — same logic as kitchenStations.classifyKitchenStation, inlined
+    // here to avoid pulling kitchen into the order-service module graph.
+    let byStation = order.foodStatusByStation ? { ...order.foodStatusByStation } : null
+    if (!byStation) {
+      byStation = {}
+      const fallbackStatus = order.foodStatus || FOOD_ORDER_STATUSES.new
+      for (const line of order.lines || []) {
+        if (!_isFoodCategoryName(line.category)) continue
+        const s = _classifyLineStation(line)
+        if (!s || byStation[s]) continue
+        byStation[s] = fallbackStatus
+      }
+    }
 
-    if (currentStatus === nextStatus) {
+    const currentStationStatus = byStation[station] || FOOD_ORDER_STATUSES.new
+
+    if (currentStationStatus === nextStatus && order.foodStatusByStation) {
+      // No-op if nothing changed AND the map already exists (lazy materialization
+      // still needs to write through on the first call).
       return
     }
+
+    byStation[station] = nextStatus
+    const overall = _deriveOverallFoodStatus(byStation)
 
     const auditLogWrite = createAuditLogWrite({
       eventId,
       type: AUDIT_TYPES.kitchenStatusChange,
       actorUid,
-      summary: `Kitchen status changed from ${currentStatus} to ${nextStatus}`,
+      summary: `Kitchen ${station} ${currentStationStatus} → ${nextStatus}`,
       targetType: 'order',
       targetId: orderId,
       personId: order.personId,
       details: {
-        previousStatus: currentStatus,
+        station,
+        previousStatus: currentStationStatus,
         nextStatus,
+        overallStatus: overall,
       },
     })
 
     transaction.set(
       orderRef,
       {
-        foodStatus: nextStatus,
+        // Per-station maps. Using dot notation for the individual key keeps
+        // sibling keys (other stations) intact when merge:true is set.
+        [`foodStatusByStation.${station}`]: nextStatus,
+        [`foodStatusUpdatedAtByStation.${station}`]: serverTimestamp(),
+        [`foodStatusUpdatedByByStation.${station}`]: { uid: actorUid, name: actorName },
+        // If we just materialized the map for an old order, write the whole
+        // map so the other stations get persisted alongside.
+        ...(!order.foodStatusByStation ? { foodStatusByStation: byStation } : {}),
+        // Legacy single field kept in sync with the derived overall status so
+        // POS workload and subscribeFoodOrders keep working unchanged.
+        foodStatus: overall,
         foodStatusUpdatedAt: serverTimestamp(),
         foodStatusUpdatedByUid: actorUid,
         foodStatusUpdatedByName: actorName,
@@ -146,6 +197,44 @@ export async function updateFoodOrderStatus({
     )
     transaction.set(auditLogWrite.ref, auditLogWrite.data)
   })
+}
+
+// ── Internal helpers (kept inline to avoid circular imports) ────────────────
+
+// Mirrors productModels.isFoodCategory, intentionally inlined.
+function _isFoodCategoryName(category) {
+  const normalized = String(category || '').trim().toLowerCase()
+  return normalized === 'kaja' || normalized === 'food'
+}
+
+const _STATION_PATTERNS = [
+  { kind: 'burger', re: /\b(?:ham)?burger\b/i },
+  { kind: 'gyros',  re: /\bgyros\b/i },
+  { kind: 'pizza',  re: /\bpizza\b/i },
+]
+function _classifyLineStation(line) {
+  const haystack = `${line.productName || ''} ${line.modifierTemplateId || ''}`
+  for (const { kind, re } of _STATION_PATTERNS) if (re.test(haystack)) return kind
+  return 'other'
+}
+
+function _deriveOverallFoodStatus(byStation) {
+  const values = Object.values(byStation || {}).filter(Boolean)
+  if (!values.length) return null
+  const order = [
+    FOOD_ORDER_STATUSES.new,
+    FOOD_ORDER_STATUSES.preparing,
+    FOOD_ORDER_STATUSES.ready,
+    FOOD_ORDER_STATUSES.delivered,
+  ]
+  if (values.every((v) => v === FOOD_ORDER_STATUSES.delivered)) return FOOD_ORDER_STATUSES.delivered
+  let minIdx = Infinity
+  for (const v of values) {
+    const i = order.indexOf(v)
+    const safeI = i === -1 ? 0 : i
+    if (safeI < minIdx) minIdx = safeI
+  }
+  return order[minIdx] || FOOD_ORDER_STATUSES.new
 }
 
 export async function refundOrder({ eventId, orderId, actorUid }) {

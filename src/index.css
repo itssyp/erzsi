@@ -1175,7 +1175,7 @@ textarea:disabled {
 /* ── POS layout ── */
 .pos-screen-layout {
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 330px 1fr;
   height: 100%;
   gap: 16px;
   min-height: 0;
@@ -2093,6 +2093,120 @@ textarea:disabled {
 }
 
 /* ── KDS ── */
+@media (max-width: 1100px), (pointer: coarse) {
+  .pos-screen-layout {
+    grid-template-columns: minmax(292px, 32vw) minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .lookup-toolbar input {
+    min-height: 46px;
+  }
+
+  .lookup-toolbar .icon-button,
+  .pos-screen-layout .primary-button,
+  .pos-screen-layout .secondary-button,
+  .pos-screen-layout .danger-button {
+    min-height: 46px;
+  }
+
+  .lookup-toolbar .icon-button {
+    width: 46px;
+    height: 46px;
+  }
+
+  .receipt-body {
+    padding: 8px;
+  }
+
+  .receipt-line {
+    align-items: center;
+    min-height: 48px;
+    padding: 4px 0;
+  }
+
+  .receipt-controls {
+    gap: 4px;
+    margin-left: 6px;
+  }
+
+  .receipt-btn {
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    font-size: 1.15rem;
+    touch-action: manipulation;
+  }
+
+  .receipt-item-name,
+  .receipt-qty-price,
+  .receipt-line-price {
+    font-size: 0.86rem;
+  }
+
+  .receipt-line-price {
+    min-width: 62px;
+  }
+
+  .pos-cart-delete-btn,
+  .pos-cart-finalize-btn {
+    min-height: 50px;
+    font-size: 0.9rem;
+  }
+
+  .pos-catalog-header .category-row {
+    gap: 8px;
+  }
+
+  .pos-catalog-header .category-btn {
+    min-height: 44px;
+    padding-inline: 14px;
+  }
+
+  .spritzer-help-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .product-grid {
+    grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+    gap: 10px;
+  }
+
+  .product-tile {
+    min-height: 96px;
+    padding: 14px;
+    touch-action: manipulation;
+  }
+}
+
+@media (max-width: 900px) {
+  .pos-screen-layout {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-x: hidden;
+    overflow-y: auto;
+    height: 100%;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pos-basket-area,
+  .pos-products-area {
+    grid-column: 1;
+    overflow: visible;
+    min-height: auto;
+    min-width: 0;
+  }
+
+  .receipt-container,
+  .receipt-body,
+  .product-grid-scroll,
+  .product-grid-blocker-shell {
+    flex: initial;
+    min-height: auto;
+    overflow: visible;
+  }
+}
+
 .kds-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
@@ -2151,8 +2265,14 @@ textarea:disabled {
   flex-direction: column;
   gap: 10px;
   align-items: stretch;
-  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  /* Vertical scroll stays here (avoids pull-to-refresh feel on the page);
+     horizontal scroll chains up to .kds-board so swiping anywhere on the
+     column body — including on a ticket card — slides between status
+     columns. Without overscroll-behavior-x: auto, horizontal swipes are
+     silently swallowed because contain blocks ancestor scroll chaining. */
+  overscroll-behavior-x: auto;
+  overscroll-behavior-y: contain;
 }
 
 /* Per-status column theming */
@@ -2273,6 +2393,184 @@ textarea:disabled {
   align-items: baseline;
   gap: 8px;
   margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+/* Station colour palette mirrored to CSS variables so other styles can
+   reference :root values instead of hard-coding hexes. Keep in sync with
+   KITCHEN_STATION_COLORS in src/features/kitchen/kitchenStations.js. */
+:root {
+  --kds-burger: #dc2626;
+  --kds-gyros:  #d97706;
+  --kds-pizza:  #16a34a;
+  --kds-other:  #64748b;
+}
+
+/* Audio cue mute toggle + unlock hint in the kitchen workload bar. */
+.kds-audio-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1.5px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  margin-left: 8px;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.kds-audio-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.kds-audio-toggle.is-muted {
+  opacity: 0.55;
+}
+.kds-audio-unlock-hint {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+  margin-left: 8px;
+  text-transform: lowercase;
+}
+
+/* "1/3 of order" hint shown only on multi-station orders. Subtle pill so it
+   doesn't compete with the loud coloured station badge next to it. */
+.kds-ticket-split-hint {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  flex-shrink: 0;
+  cursor: help;
+}
+
+/* Station badge — colour comes from inline style (KITCHEN_STATION_COLORS) so
+   adding a new station only requires updating the JS map, no CSS edit. */
+.kds-station-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #fff;
+  border-radius: 4px;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+/* Station-filter dropdown sitting inside the kitchen workload bar. Trigger
+   button is compact; the menu pops below it with anchored absolute position. */
+.kds-filter-menu {
+  position: relative;
+  margin-left: 8px;
+}
+
+.kds-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: transparent;
+  color: inherit;
+  border: 1.5px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  max-width: 220px;
+  transition: background var(--t-fast);
+}
+.kds-filter-trigger:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.kds-filter-trigger.is-open {
+  background: rgba(255, 255, 255, 0.18);
+}
+.kds-filter-trigger-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.kds-filter-trigger-caret {
+  font-size: 0.7rem;
+  opacity: 0.85;
+}
+
+.kds-filter-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  padding: 6px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kds-filter-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kds-filter-row:hover {
+  background: var(--bg);
+}
+.kds-filter-row input[type='checkbox'] {
+  margin: 0;
+  cursor: pointer;
+}
+.kds-filter-row-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.kds-filter-row-label {
+  text-align: left;
+}
+.kds-filter-row-count {
+  font-size: 0.75rem;
+  font-weight: 800;
+  color: var(--muted);
+  background: var(--bg);
+  padding: 1px 7px;
+  border-radius: 10px;
+  min-width: 22px;
+  text-align: center;
+}
+/* The Összes row doesn't have a swatch — fill that grid cell so the column
+   alignment stays consistent across all rows. */
+.kds-filter-row:first-child {
+  grid-template-columns: auto 1fr auto;
+}
+.kds-filter-row:first-child .kds-filter-row-swatch {
+  display: none;
 }
 
 .kds-ticket-name {
@@ -5935,14 +6233,14 @@ textarea:disabled {
 
   .pos-catalog-header .category-btn {
     flex: 0 0 auto;
-    min-height: 38px;
-    padding: 0 12px;
+    min-height: 44px;
+    padding: 0 14px;
     font-size: 0.74rem;
   }
 
   .spritzer-help-button {
-    width: 38px;
-    height: 38px;
+    width: 44px;
+    height: 44px;
   }
 
   .spritzer-guide-modal {
@@ -6331,7 +6629,7 @@ textarea:disabled {
   }
 
   .product-tile {
-    min-height: 92px;
+    min-height: 96px;
     padding: 12px;
   }
 
@@ -6376,6 +6674,77 @@ textarea:disabled {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  /* Workload bar — single-line, compact. The coloured background already
+     conveys the workload level, so the progress track + numeric stats are
+     dropped at this width to make room for the filter / audio / close
+     controls without wrapping. */
+  .kds-workload-bar {
+    padding: 6px 12px;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+  .kds-workload-left,
+  .kds-workload-right {
+    min-width: 0;
+    gap: 6px;
+  }
+  .kds-workload-track {
+    display: none;
+  }
+  .kds-workload-center {
+    padding: 0 6px;
+    border-left: none;
+    border-right: none;
+  }
+  .kds-workload-wait-label {
+    display: none;
+  }
+  .kds-workload-wait-value {
+    font-size: 0.95rem;
+  }
+  .kds-workload-tag {
+    font-size: 0.55rem;
+  }
+  .kds-workload-level {
+    font-size: 0.88rem;
+  }
+  /* Inline "X rendelés | Y aktív tétel" — duplicated by the column count
+     badges, so save the space on small screens. */
+  .kds-workload-stat,
+  .kds-workload-sep {
+    display: none;
+  }
+  .kds-kitchen-toggle-btn {
+    font-size: 0.62rem;
+    padding: 4px 8px;
+  }
+  .kds-audio-toggle {
+    padding: 3px 7px;
+    font-size: 0.6rem;
+    letter-spacing: 0.04em;
+  }
+  /* The unlock hint is informative but consumes too much horizontal real
+     estate on phones — first tap unlocks regardless. */
+  .kds-audio-unlock-hint {
+    display: none;
+  }
+  .kds-filter-trigger {
+    padding: 3px 7px;
+    font-size: 0.6rem;
+    max-width: 130px;
+    letter-spacing: 0.04em;
+  }
+  .kds-filter-trigger-label {
+    max-width: 90px;
+  }
+  /* Anchor the dropdown panel to the right edge of the bar and never let it
+     overflow the viewport. */
+  .kds-filter-menu-panel {
+    right: 0;
+    left: auto;
+    max-width: calc(100vw - 24px);
   }
 
   .detail-list li {
@@ -6648,7 +7017,10 @@ textarea:disabled {
   }
 
   .kds-board {
-    grid-template-columns: repeat(4, minmax(260px, 88vw));
+    /* One column at a time with a peek of the next — feels native on
+       phones; staff swipe between status columns instead of cramming. */
+    grid-template-columns: repeat(4, minmax(86vw, 320px));
+    scroll-snap-type: x mandatory;
   }
 
   .kds-ticket-meta {
@@ -6658,6 +7030,46 @@ textarea:disabled {
 
   .kds-ticket-meta-right {
     margin-left: 0;
+  }
+
+  /* Workload bar at phone widths — drop the level word entirely (the colour
+     and wait-time are enough) and shrink everything one more notch. */
+  .kds-workload-bar {
+    padding: 5px 10px;
+    gap: 6px;
+  }
+  .kds-workload-tag {
+    display: none;
+  }
+  .kds-workload-level {
+    font-size: 0.78rem;
+  }
+  .kds-workload-wait-value {
+    font-size: 0.88rem;
+  }
+  .kds-kitchen-toggle-btn {
+    font-size: 0.58rem;
+    padding: 3px 6px;
+  }
+  .kds-audio-toggle {
+    padding: 2px 6px;
+    font-size: 0.56rem;
+  }
+  .kds-filter-trigger {
+    padding: 2px 6px;
+    font-size: 0.56rem;
+    max-width: 110px;
+  }
+  .kds-filter-trigger-label {
+    max-width: 70px;
+  }
+  .kds-column-header {
+    padding: 6px 10px;
+    font-size: 0.66rem;
+  }
+  .kds-column-body {
+    padding: 8px 8px calc(14px + env(safe-area-inset-bottom, 0px));
+    gap: 8px;
   }
 
   .customization-modal-body {

@@ -5,6 +5,29 @@ import { useActiveEvent } from '../events/useActiveEvent'
 import { setKitchenClosedStatus } from '../events/eventService'
 import { isFoodCategory } from '../products/productModels'
 import { estimateWaitMinutes, formatWaitTime, getWorkloadLevel } from './kitchenModels'
+import {
+  FILTERABLE_STATIONS,
+  KITCHEN_STATIONS,
+  KITCHEN_STATION_COLORS,
+  KITCHEN_STATION_LABELS,
+  splitOrderByStation,
+} from './kitchenStations'
+
+// LocalStorage key for the filter selection — per event so a tablet that
+// switches between events doesn't carry over the burger filter into a future
+// event by accident.
+const FILTER_STORAGE_KEY = (eventId) => `kds.stationFilter::${eventId || 'default'}`
+const AUDIO_MUTED_STORAGE_KEY = (eventId) => `kds.audioMuted::${eventId || 'default'}`
+
+// Per-station audio cue: a short triangle-wave chime, synthesized via Web
+// Audio so we don't need to bundle sound files. Different pitches per station
+// mean a chef can tell from across the kitchen which station just got hit.
+const STATION_TONES = {
+  burger: [440],                  // A4 — low single note
+  gyros:  [587.33],               // D5 — mid single note
+  pizza:  [880],                  // A5 — high single note
+  other:  [523.25, 659.25],       // C5 → E5 — quick two-tone
+}
 
 const nextStatusMap = {
   [FOOD_ORDER_STATUSES.new]: FOOD_ORDER_STATUSES.preparing,
@@ -66,8 +89,27 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
   const [selectedOrderId, setSelectedOrderId] = useState('')
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [nowMs, setNowMs] = useState(() => Date.now())
+  // selectedStations is an explicit whitelist of FILTERABLE_STATIONS. Empty set
+  // = "Összes" mode (every station, including `other`, visible). Non-empty =
+  // strict whitelist; `other` is implicitly hidden because it has no chip.
+  const [selectedStations, setSelectedStations] = useState(() => new Set())
+  const [audioMuted, setAudioMuted] = useState(false)
+  const [audioUnlocked, setAudioUnlocked] = useState(false)
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false)
   const boardRef = useRef(null)
+  const filterMenuRef = useRef(null)
   const statusChangeRef = useRef(async () => {})
+  const audioCtxRef = useRef(null)
+  // Tracks whether the current selection came from a user action (tap / arrow
+  // key) versus the automatic "pick the first ticket" on load. Used to skip
+  // scrollIntoView on the initial auto-pick — otherwise on mobile the board
+  // jumps to whichever column happens to hold the oldest ticket (often
+  // Készül), even though the user just opened the page wanting to see Új.
+  const userInteractedRef = useRef(false)
+  // Tickets we've already seen across renders. Prevents the very first render
+  // from chiming for every pre-existing ticket on mount.
+  const seenTicketIdsRef = useRef(new Set())
+  const seenTicketsInitialisedRef = useRef(false)
 
   useEffect(() => {
     return subscribeFoodOrders(eventId, setOrders, (error) => setErrorMessage(error.message))
@@ -86,43 +128,259 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
     return () => window.clearInterval(timer)
   }, [])
 
-  const visibleOrders = useMemo(() => {
-    return orders.filter((order) => {
-      const status = order.foodStatus || FOOD_ORDER_STATUSES.new
-      if (status !== FOOD_ORDER_STATUSES.delivered) return true
-      const updatedAtMs = getMillis(order.foodStatusUpdatedAt || order.updatedAt)
+  // Load persisted filter selection for this event on mount / event-change.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(FILTER_STORAGE_KEY(eventId))
+      if (!raw) {
+        setSelectedStations(new Set())
+        return
+      }
+      const arr = JSON.parse(raw)
+      if (!Array.isArray(arr)) {
+        setSelectedStations(new Set())
+        return
+      }
+      // Only keep stations that are still in FILTERABLE_STATIONS (defensive
+      // against future renames / removals).
+      const filtered = arr.filter((s) => FILTERABLE_STATIONS.includes(s))
+      setSelectedStations(new Set(filtered))
+    } catch {
+      setSelectedStations(new Set())
+    }
+  }, [eventId])
+
+  // Persist on change. Empty set written as [] (= "Összes") so user choice
+  // round-trips correctly.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(
+        FILTER_STORAGE_KEY(eventId),
+        JSON.stringify(Array.from(selectedStations)),
+      )
+    } catch {}
+  }, [eventId, selectedStations])
+
+  // ── Audio cue engine ────────────────────────────────────────────────────
+
+  function getAudioCtx() {
+    if (typeof window === 'undefined') return null
+    if (!audioCtxRef.current) {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext
+        if (!Ctx) return null
+        audioCtxRef.current = new Ctx()
+      } catch {
+        return null
+      }
+    }
+    return audioCtxRef.current
+  }
+
+  function playStationChime(station) {
+    const ctx = getAudioCtx()
+    if (!ctx || ctx.state !== 'running') return
+    const tones = STATION_TONES[station] || STATION_TONES.burger
+    const now = ctx.currentTime
+    tones.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'triangle'
+      osc.frequency.value = freq
+      const startAt = now + i * 0.18
+      gain.gain.setValueAtTime(0, startAt)
+      gain.gain.linearRampToValueAtTime(0.25, startAt + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.4)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(startAt)
+      osc.stop(startAt + 0.5)
+    })
+  }
+
+  // Browser autoplay policies require a user gesture before audio plays. Wait
+  // for any pointerdown / keydown then resume the context.
+  useEffect(() => {
+    if (audioUnlocked) return undefined
+    const unlock = () => {
+      const ctx = getAudioCtx()
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().catch(() => {})
+      }
+      setAudioUnlocked(true)
+    }
+    window.addEventListener('pointerdown', unlock, { once: true })
+    window.addEventListener('keydown', unlock, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [audioUnlocked])
+
+  // Load + persist mute state per event.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = window.localStorage.getItem(AUDIO_MUTED_STORAGE_KEY(eventId))
+      setAudioMuted(raw === 'true')
+    } catch {
+      setAudioMuted(false)
+    }
+    // Reset the seen-ids tracker when switching events so the new event
+    // doesn't immediately chime for every existing ticket.
+    seenTicketIdsRef.current = new Set()
+    seenTicketsInitialisedRef.current = false
+  }, [eventId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(AUDIO_MUTED_STORAGE_KEY(eventId), String(audioMuted))
+    } catch {}
+  }, [eventId, audioMuted])
+
+  // Close the filter dropdown when the user taps anywhere outside it (incl.
+  // taps inside the dropdown's own buttons trigger this *after* the option
+  // handler ran, so the menu collapses post-selection without extra wiring).
+  useEffect(() => {
+    if (!filterMenuOpen) return undefined
+    const handler = (event) => {
+      const root = filterMenuRef.current
+      if (root && !root.contains(event.target)) setFilterMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', handler)
+    return () => window.removeEventListener('pointerdown', handler)
+  }, [filterMenuOpen])
+
+  // Derived: when no specific filter is active OR every filterable is selected,
+  // treat as "Összes" — show every ticket including the `other` station.
+  const isAllMode = selectedStations.size === 0
+    || selectedStations.size === FILTERABLE_STATIONS.length
+
+  function toggleStation(station) {
+    setSelectedStations((prev) => {
+      const next = new Set(prev)
+      if (next.has(station)) {
+        next.delete(station)
+      } else {
+        next.add(station)
+      }
+      // Collapsing back to "all selected" → store as empty so isAllMode stays
+      // truthy and "other" tickets come back.
+      if (next.size === FILTERABLE_STATIONS.length) return new Set()
+      return next
+    })
+  }
+
+  function selectAllStations() {
+    setSelectedStations(new Set())
+  }
+
+  // Split every order into per-station sub-tickets. splitOrderByStation
+  // handles the lazy fallback for orders created before the per-station fields
+  // existed — those still produce tickets, all sharing order.foodStatus until
+  // the first time a chef advances one of them.
+  const allTickets = useMemo(() => {
+    const out = []
+    for (const order of orders) out.push(...splitOrderByStation(order))
+    return out
+  }, [orders])
+
+  // ── Audio: detect newly-arrived tickets and chime once each ─────────────
+  // Strategy: on the FIRST render after data arrives, just record every ticket
+  // id as "seen" with no sound. On every subsequent change, any id that isn't
+  // in the seen set is brand new — chime if it's currently visible (respects
+  // the station filter) and not muted, then mark it seen so we don't repeat.
+  useEffect(() => {
+    if (!seenTicketsInitialisedRef.current) {
+      // First population — silence + seed the set.
+      for (const t of allTickets) seenTicketIdsRef.current.add(t.id)
+      seenTicketsInitialisedRef.current = true
+      return
+    }
+    if (audioMuted || !audioUnlocked) {
+      // Even when muted, advance the seen-set so unmuting later doesn't
+      // backfire and chime for stale tickets.
+      for (const t of allTickets) seenTicketIdsRef.current.add(t.id)
+      return
+    }
+    for (const t of allTickets) {
+      if (seenTicketIdsRef.current.has(t.id)) continue
+      seenTicketIdsRef.current.add(t.id)
+      // Only chime for tickets that arrive in 'new' state — skip backfills
+      // and any status transitions on existing tickets.
+      if (t.status !== FOOD_ORDER_STATUSES.new) continue
+      // Respect the station filter: a pizza-only tablet stays silent for
+      // burger tickets even when they come in.
+      if (!isAllMode && !selectedStations.has(t.station)) continue
+      playStationChime(t.station)
+    }
+    // playStationChime is intentionally not in deps — it's a stable function
+    // closure that reads refs and state. Including it would re-run on every
+    // render. Same for getAudioCtx / STATION_TONES.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allTickets, audioMuted, audioUnlocked, isAllMode, selectedStations])
+
+  // Visibility: hide a ticket once it has been `delivered` for more than the
+  // grace window AND honour the station filter (whitelist if not in "Összes"
+  // mode).
+  const visibleTickets = useMemo(() => {
+    return allTickets.filter((t) => {
+      if (!isAllMode && !selectedStations.has(t.station)) return false
+      if (t.status !== FOOD_ORDER_STATUSES.delivered) return true
+      const updatedAtMs = getMillis(t.statusUpdatedAt || t.order.updatedAt)
       return nowMs - updatedAtMs < DELIVERED_HIDE_MS
     })
-  }, [nowMs, orders])
+  }, [nowMs, allTickets, isAllMode, selectedStations])
 
-  const sortedOrders = useMemo(() => {
-    return [...visibleOrders].sort((a, b) => getMillis(a.createdAt) - getMillis(b.createdAt))
-  }, [visibleOrders])
+  // Per-station active counts for the workload-bar breakdown + filter pills.
+  // ALWAYS computed across all (non-filtered) tickets so the pills tell the
+  // truth even when the user is filtered to one station.
+  const activeCountsByStation = useMemo(() => {
+    const counts = { burger: 0, gyros: 0, pizza: 0, other: 0 }
+    for (const t of allTickets) {
+      if (t.status === FOOD_ORDER_STATUSES.delivered) continue
+      counts[t.station] = (counts[t.station] || 0) + 1
+    }
+    return counts
+  }, [allTickets])
 
-  const ordersByStatus = useMemo(() => {
+  const sortedTickets = useMemo(() => {
+    // Stable order: by original order createdAt, then by station so split
+    // tickets from the same order stay adjacent.
+    return [...visibleTickets].sort((a, b) => {
+      const dt = getMillis(a.order.createdAt) - getMillis(b.order.createdAt)
+      if (dt !== 0) return dt
+      return a.index - b.index
+    })
+  }, [visibleTickets])
+
+  const ticketsByStatus = useMemo(() => {
     const groups = {
       [FOOD_ORDER_STATUSES.new]: [],
       [FOOD_ORDER_STATUSES.preparing]: [],
       [FOOD_ORDER_STATUSES.ready]: [],
       [FOOD_ORDER_STATUSES.delivered]: [],
     }
-    sortedOrders.forEach((order) => {
-      const status = order.foodStatus || FOOD_ORDER_STATUSES.new
-      if (groups[status]) groups[status].push(order)
+    sortedTickets.forEach((ticket) => {
+      const status = ticket.status || FOOD_ORDER_STATUSES.new
+      if (groups[status]) groups[status].push(ticket)
     })
     return groups
-  }, [sortedOrders])
+  }, [sortedTickets])
 
   const workload = useMemo(() => {
-    const countFoodItems = (order) =>
-      order.lines.filter((line) => isFoodCategory(line.category)).reduce((sum, line) => sum + (line.quantity || 0), 0)
+    const countTicketItems = (ticket) =>
+      ticket.lines.filter((line) => isFoodCategory(line.category))
+        .reduce((sum, line) => sum + (line.quantity || 0), 0)
 
-    const newOrders = ordersByStatus[FOOD_ORDER_STATUSES.new]
-    const preparingOrders = ordersByStatus[FOOD_ORDER_STATUSES.preparing]
-    const newItems = newOrders.reduce((sum, order) => sum + countFoodItems(order), 0)
-    const preparingItems = preparingOrders.reduce((sum, order) => sum + countFoodItems(order), 0)
+    const newTickets = ticketsByStatus[FOOD_ORDER_STATUSES.new]
+    const preparingTickets = ticketsByStatus[FOOD_ORDER_STATUSES.preparing]
+    const newItems = newTickets.reduce((sum, t) => sum + countTicketItems(t), 0)
+    const preparingItems = preparingTickets.reduce((sum, t) => sum + countTicketItems(t), 0)
     const activeItems = newItems + preparingItems
-    const activeOrderCount = newOrders.length + preparingOrders.length
+    const activeOrderCount = newTickets.length + preparingTickets.length
     const level = getWorkloadLevel(activeItems)
     const estimatedMinutes = estimateWaitMinutes(newItems, preparingItems)
 
@@ -133,21 +391,24 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
       estimatedMinutes,
       formattedWait: formatWaitTime(estimatedMinutes),
     }
-  }, [ordersByStatus])
+  }, [ticketsByStatus])
 
+  // selectedOrderId is now actually a ticket id (`${orderId}::${station}`).
+  // Kept the variable name to minimise diff churn elsewhere in the file.
   useEffect(() => {
-    if (!sortedOrders.length) {
+    if (!sortedTickets.length) {
       setSelectedOrderId('')
       return
     }
-    if (!selectedOrderId || !sortedOrders.some((order) => order.id === selectedOrderId)) {
-      setSelectedOrderId(sortedOrders[0].id)
+    if (!selectedOrderId || !sortedTickets.some((t) => t.id === selectedOrderId)) {
+      setSelectedOrderId(sortedTickets[0].id)
     }
-  }, [sortedOrders, selectedOrderId])
+  }, [sortedTickets, selectedOrderId])
 
   useEffect(() => {
     if (!selectedOrderId) return
-    const element = boardRef.current?.querySelector(`[data-order-id="${selectedOrderId}"]`)
+    if (!userInteractedRef.current) return
+    const element = boardRef.current?.querySelector(`[data-ticket-id="${selectedOrderId}"]`)
     if (element) element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [selectedOrderId])
 
@@ -155,41 +416,50 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
     const handleKeyDown = (event) => {
       const activeTag = document.activeElement?.tagName
       if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return
-      if (!sortedOrders.length) return
+      if (!sortedTickets.length) return
 
-      const currentIndex = sortedOrders.findIndex((order) => order.id === selectedOrderId)
+      const currentIndex = sortedTickets.findIndex((t) => t.id === selectedOrderId)
       const safeIndex = currentIndex >= 0 ? currentIndex : 0
 
       if (event.key === 'ArrowRight') {
         event.preventDefault()
-        setSelectedOrderId(sortedOrders[Math.min(sortedOrders.length - 1, safeIndex + 1)].id)
+        userInteractedRef.current = true
+        setSelectedOrderId(sortedTickets[Math.min(sortedTickets.length - 1, safeIndex + 1)].id)
       }
 
       if (event.key === 'ArrowLeft') {
         event.preventDefault()
-        setSelectedOrderId(sortedOrders[Math.max(0, safeIndex - 1)].id)
+        userInteractedRef.current = true
+        setSelectedOrderId(sortedTickets[Math.max(0, safeIndex - 1)].id)
       }
 
       if (event.key === 'Enter' || event.key === ' ') {
-        const currentOrder = sortedOrders[safeIndex]
-        const nextStatus = nextStatusMap[currentOrder.foodStatus || FOOD_ORDER_STATUSES.new]
-        if (nextStatus && pendingOrderId !== currentOrder.id) {
+        const currentTicket = sortedTickets[safeIndex]
+        const nextStatus = nextStatusMap[currentTicket.status || FOOD_ORDER_STATUSES.new]
+        if (nextStatus && pendingOrderId !== currentTicket.id) {
           event.preventDefault()
-          statusChangeRef.current(currentOrder.id, nextStatus)
+          statusChangeRef.current(currentTicket, nextStatus)
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [sortedOrders, selectedOrderId, pendingOrderId])
+  }, [sortedTickets, selectedOrderId, pendingOrderId])
 
-  async function handleStatusChange(orderId, nextStatus) {
+  async function handleStatusChange(ticket, nextStatus) {
     if (!nextStatus) return
-    setPendingOrderId(orderId)
+    setPendingOrderId(ticket.id)
     setErrorMessage('')
     try {
-      await updateFoodOrderStatus({ eventId, orderId, nextStatus, actorUid, actorName })
+      await updateFoodOrderStatus({
+        eventId,
+        orderId: ticket.order.id,
+        station: ticket.station,
+        nextStatus,
+        actorUid,
+        actorName,
+      })
     } catch (error) {
       setErrorMessage(error.message)
     } finally {
@@ -227,6 +497,77 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
           <span className="kds-workload-stat">{workload.activeOrderCount} rendelés</span>
           <span className="kds-workload-sep">|</span>
           <span className="kds-workload-stat">{workload.activeItems} aktív tétel</span>
+
+          {/* Station-filter dropdown — inline replacement for the old pill
+              row. Label summarises the current selection; menu has multi-
+              select checkboxes including Összes (which selects all). */}
+          <div className="kds-filter-menu" ref={filterMenuRef}>
+            <button
+              type="button"
+              className={`kds-filter-trigger${filterMenuOpen ? ' is-open' : ''}`}
+              onClick={() => setFilterMenuOpen((o) => !o)}
+              aria-haspopup="menu"
+              aria-expanded={filterMenuOpen}
+            >
+              <span className="kds-filter-trigger-label">
+                {isAllMode
+                  ? 'Összes'
+                  : (FILTERABLE_STATIONS.filter((s) => selectedStations.has(s))
+                      .map((s) => KITCHEN_STATION_LABELS[s])
+                      .join(', ') || 'Egyik sem')}
+              </span>
+              <span className="kds-filter-trigger-caret" aria-hidden="true">▾</span>
+            </button>
+            {filterMenuOpen ? (
+              <div className="kds-filter-menu-panel" role="menu">
+                <label className="kds-filter-row">
+                  <input
+                    type="checkbox"
+                    checked={isAllMode}
+                    onChange={selectAllStations}
+                  />
+                  <span className="kds-filter-row-label">Összes</span>
+                  <span className="kds-filter-row-count">
+                    {activeCountsByStation.burger
+                      + activeCountsByStation.gyros
+                      + activeCountsByStation.pizza
+                      + activeCountsByStation.other}
+                  </span>
+                </label>
+                {FILTERABLE_STATIONS.map((s) => (
+                  <label key={s} className="kds-filter-row">
+                    <input
+                      type="checkbox"
+                      checked={!isAllMode && selectedStations.has(s)}
+                      onChange={() => toggleStation(s)}
+                    />
+                    <span
+                      className="kds-filter-row-swatch"
+                      style={{ background: KITCHEN_STATION_COLORS[s] }}
+                      aria-hidden="true"
+                    />
+                    <span className="kds-filter-row-label">{KITCHEN_STATION_LABELS[s]}</span>
+                    <span className="kds-filter-row-count">{activeCountsByStation[s] || 0}</span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            className={`kds-audio-toggle${audioMuted ? ' is-muted' : ''}`}
+            onClick={() => setAudioMuted((m) => !m)}
+            title={audioMuted ? 'Hangok bekapcsolása' : 'Hangok némítása'}
+            aria-label={audioMuted ? 'Hangok bekapcsolása' : 'Hangok némítása'}
+          >
+            {audioMuted ? 'NÉMA' : 'HANG'}
+          </button>
+          {!audioUnlocked && !audioMuted ? (
+            <span className="kds-audio-unlock-hint" title="Az első kattintás után engedélyezzük a hangot.">
+              kattints a hang engedélyezéséhez
+            </span>
+          ) : null}
           <button
             type="button"
             className={`kds-kitchen-toggle-btn${activeEvent?.isKitchenClosed ? ' is-closed' : ''}`}
@@ -249,30 +590,62 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
 
       <div className="kds-board">
         {COLUMNS.map(({ status, label, colClass }) => {
-          const columnOrders = ordersByStatus[status] || []
+          const columnTickets = ticketsByStatus[status] || []
           return (
             <div key={status} className={`kds-column ${colClass}`}>
               <div className="kds-column-header">
                 <span>{label}</span>
-                <span>{columnOrders.length}</span>
+                <span>{columnTickets.length}</span>
               </div>
 
               <div className="kds-column-body">
-                {columnOrders.map((order) => {
+                {columnTickets.map((ticket) => {
+                  const order = ticket.order
                   const minutesOpen = getMinutesOpen(order.createdAt)
                   const nextStatus = nextStatusMap[status]
                   const late = isLate(status, minutesOpen)
-                  const foodLines = order.lines.filter((line) => isFoodCategory(line.category))
+                  const stationColor = KITCHEN_STATION_COLORS[ticket.station]
+                  const stationLabel = KITCHEN_STATION_LABELS[ticket.station]
+                  const isSplitOrder = ticket.totalCount > 1
+                  // For multi-station orders, tell the chef which OTHER stations
+                  // the same customer is waiting on (hover/long-press tooltip).
+                  const siblingStations = isSplitOrder
+                    ? (order.foodStatusByStation
+                        ? Object.keys(order.foodStatusByStation)
+                        : Array.from(new Set((order.lines || []).map((l) => {
+                            const text = `${l.productName || ''} ${l.modifierTemplateId || ''}`
+                            if (/\b(?:ham)?burger\b/i.test(text)) return KITCHEN_STATIONS.burger
+                            if (/\bgyros\b/i.test(text)) return KITCHEN_STATIONS.gyros
+                            if (/\bpizza\b/i.test(text)) return KITCHEN_STATIONS.pizza
+                            return KITCHEN_STATIONS.other
+                          }))))
+                          .map((s) => KITCHEN_STATION_LABELS[s] || s).join(', ')
+                    : ''
 
                   return (
                     <article
-                      key={order.id}
-                      data-order-id={order.id}
-                      className={`kds-ticket receipt-container${late ? ' tone-late' : ''} tone-${status === FOOD_ORDER_STATUSES.delivered ? 'delivered' : status === FOOD_ORDER_STATUSES.ready ? 'ready' : status === FOOD_ORDER_STATUSES.preparing ? 'preparing' : 'new'}${selectedOrderId === order.id ? ' selected' : ''}`}
-                      onClick={() => { setSelectedOrderId(order.id) }}
+                      key={ticket.id}
+                      data-ticket-id={ticket.id}
+                      className={`kds-ticket receipt-container kds-ticket--${ticket.station}${late ? ' tone-late' : ''} tone-${status === FOOD_ORDER_STATUSES.delivered ? 'delivered' : status === FOOD_ORDER_STATUSES.ready ? 'ready' : status === FOOD_ORDER_STATUSES.preparing ? 'preparing' : 'new'}${selectedOrderId === ticket.id ? ' selected' : ''}`}
+                      style={{ borderLeft: `5px solid ${stationColor}` }}
+                      onClick={() => { userInteractedRef.current = true; setSelectedOrderId(ticket.id) }}
                     >
                       <div className="kds-ticket-header receipt-header">
                         <div className="kds-ticket-header-row">
+                          <span
+                            className={`kds-station-badge kds-station-badge--${ticket.station}`}
+                            style={{ background: stationColor }}
+                          >
+                            {stationLabel}
+                          </span>
+                          {isSplitOrder ? (
+                            <span
+                              className="kds-ticket-split-hint"
+                              title={`Megosztott rendelés: ${siblingStations}`}
+                            >
+                              {ticket.index + 1}/{ticket.totalCount}
+                            </span>
+                          ) : null}
                           <span className="kds-ticket-name">{order.personDisplayName}</span>
                           <span className="kds-ticket-id">#{order.personDisplayId || order.personInternalId}</span>
                         </div>
@@ -292,7 +665,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                       </div>
 
                       <div className="kds-ticket-body receipt-body">
-                        {foodLines.map((line) => (
+                        {ticket.lines.map((line) => (
                           <div key={line.lineId} className="kds-food-item">
                             <div className="kds-food-item-row">
                               <span className="kds-food-item-name">{line.productName}</span>
@@ -316,17 +689,17 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                         <div className="kds-ticket-summary receipt-subtotal">
                           <span>Tételek</span>
                           <span className="receipt-dots" />
-                          <span>{foodLines.reduce((sum, line) => sum + (line.quantity || 0), 0)}</span>
+                          <span>{ticket.lines.reduce((sum, line) => sum + (line.quantity || 0), 0)}</span>
                         </div>
                         {nextStatus ? (
                           <button
                             type="button"
                             className="primary-button"
                             style={{ width: '100%', padding: '10px', fontWeight: 800, fontSize: '0.85rem' }}
-                            onClick={(event) => { event.stopPropagation(); handleStatusChange(order.id, nextStatus) }}
-                            disabled={pendingOrderId === order.id}
+                            onClick={(event) => { event.stopPropagation(); handleStatusChange(ticket, nextStatus) }}
+                            disabled={pendingOrderId === ticket.id}
                           >
-                            {pendingOrderId === order.id ? '...' : actionLabelMap[status]}
+                            {pendingOrderId === ticket.id ? '...' : actionLabelMap[status]}
                           </button>
                         ) : (
                           <div style={{ textAlign: 'center', color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 700 }}>
@@ -338,7 +711,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                   )
                 })}
 
-                {columnOrders.length === 0 && (
+                {columnTickets.length === 0 && (
                   <div style={{ textAlign: 'center', color: 'var(--muted)', fontSize: '0.78rem', padding: '20px 8px', opacity: 0.5 }}>
                     -
                   </div>
