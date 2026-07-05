@@ -84,6 +84,30 @@ const SPRITZER_GUIDE = Object.freeze([
   { name: 'Sportfröccs', ratio: '1:4', wineDl: 1, sodaDl: 4 },
   { name: 'Viceházmester', ratio: '2:3', wineDl: 2, sodaDl: 3 },
 ])
+const LONG_DRINK_RULES = Object.freeze([
+  '4 cl alkohol',
+  '2,5 dl mixer',
+  'Jég opcionális',
+  'Pohárba töltve, nem shakerben',
+])
+const LONG_DRINK_GUIDE = Object.freeze([
+  { name: 'Gin-fizz', spirit: '4 cl gin', mixer: '2,5 dl fizz / szóda', tone: 'gin' },
+  { name: 'Gin-tonic', spirit: '4 cl gin', mixer: '2,5 dl tonic', tone: 'gin' },
+  { name: 'Pink gin-fizz', spirit: '4 cl pink gin', mixer: '2,5 dl fizz / szóda', tone: 'pink' },
+  { name: 'Pink gin-tonic', spirit: '4 cl pink gin', mixer: '2,5 dl tonic', tone: 'pink' },
+  { name: 'Jager-hell', spirit: '4 cl Jager', mixer: '2,5 dl Hell', tone: 'energy' },
+  { name: 'Jager-üdcsi', spirit: '4 cl Jager', mixer: '2,5 dl üdcsi', tone: 'soft' },
+  { name: 'Malibu-üdcsi', spirit: '4 cl Malibu', mixer: '2,5 dl üdcsi', tone: 'tropical' },
+  { name: 'Rum-kóla', spirit: '4 cl rum', mixer: '2,5 dl kóla', tone: 'cola' },
+  { name: 'Vodka-hell', spirit: '4 cl vodka', mixer: '2,5 dl Hell', tone: 'energy' },
+  { name: 'Vodka-szóda', spirit: '4 cl vodka', mixer: '2,5 dl szóda', tone: 'clear' },
+  { name: 'Vodka-üdcsi', spirit: '4 cl vodka', mixer: '2,5 dl üdcsi', tone: 'soft' },
+  { name: 'Whiskey-hell', spirit: '4 cl whiskey', mixer: '2,5 dl Hell', tone: 'energy' },
+  { name: 'Whiskey-üdcsi', spirit: '4 cl whiskey', mixer: '2,5 dl üdcsi', tone: 'soft' },
+  { name: 'Pina colada', spirit: '4 cl Malibu / alap', mixer: '2,5 dl ananász / üdcsi', tone: 'tropical' },
+  { name: 'Partylong', spirit: '4 cl alap', mixer: '2,5 dl mixer', tone: 'house' },
+  { name: 'Vadászpilk', spirit: '4 cl alap', mixer: '2,5 dl mixer', tone: 'house' },
+])
 // BURGER_TRIGGER_PATTERN / GYROS_TRIGGER_PATTERN now imported from kitchenStations
 // (single source of truth — also drives kitchen-side ticket splitting).
 const BURGER_SPRITE_KEYWORDS = Object.freeze([
@@ -225,6 +249,23 @@ function SpritzerGlass({ wineDl, sodaDl }) {
     <div className="spritzer-glass" aria-hidden="true">
       <div className="spritzer-fill spritzer-soda" style={{ height: sodaPercent, bottom: winePercent }} />
       <div className="spritzer-fill spritzer-wine" style={{ height: winePercent }} />
+    </div>
+  )
+}
+
+function LongDrinkGlass({ tone }) {
+  return (
+    <div className={`longdrink-glass longdrink-glass--${tone || 'soft'}`} aria-hidden="true">
+      <div className="longdrink-cup-rim" />
+      <div className="longdrink-cup-band" />
+      <div className="longdrink-fill longdrink-fill-spirit" />
+      <div className="longdrink-fill longdrink-fill-mixer" />
+      {[4, 3, 2, 1].map((dl) => (
+        <div key={dl} className={`longdrink-measure longdrink-measure-${dl}`}>
+          <span />
+          <strong>{dl} dl</strong>
+        </div>
+      ))}
     </div>
   )
 }
@@ -792,6 +833,7 @@ export function StaffPosPanel({ eventId }) {
   const [pizzaGameProduct, setPizzaGameProduct] = useState(null)
   const funLongPressRef = useRef(null)
   const [spritzerGuideOpen, setSpritzerGuideOpen] = useState(false)
+  const [longDrinkGuideOpen, setLongDrinkGuideOpen] = useState(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [availabilityProduct, setAvailabilityProduct] = useState(null)
@@ -898,17 +940,18 @@ export function StaffPosPanel({ eventId }) {
   }, [eventId, selectedPerson?.id])
 
   useEffect(() => {
-    if (!spritzerGuideOpen) return undefined
+    if (!spritzerGuideOpen && !longDrinkGuideOpen) return undefined
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
         setSpritzerGuideOpen(false)
+        setLongDrinkGuideOpen(false)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [spritzerGuideOpen])
+  }, [longDrinkGuideOpen, spritzerGuideOpen])
 
   const displayedPerson = switchTargetPerson || selectedPerson
   const isSwitchingPerson = Boolean(switchTargetPerson)
@@ -2307,7 +2350,7 @@ export function StaffPosPanel({ eventId }) {
           >
             {groupedProducts.map((group) => (
               <section key={group.category} className="product-category-section">
-                {showProductCategoryHeadings || group.category === 'Bor' ? (
+                {showProductCategoryHeadings || group.category === 'Bor' || group.category === 'Hosszúital' ? (
                   <div className="product-category-title-row">
                     <h4 className="product-category-title">{group.category}</h4>
                     {group.category === 'Bor' ? (
@@ -2317,6 +2360,17 @@ export function StaffPosPanel({ eventId }) {
                         onClick={() => setSpritzerGuideOpen(true)}
                         aria-label="Fröccs útmutató megnyitása"
                         title="Fröccs útmutató"
+                      >
+                        <HelpIcon />
+                      </button>
+                    ) : null}
+                    {group.category === 'Hosszúital' ? (
+                      <button
+                        type="button"
+                        className="spritzer-help-button longdrink-help-button"
+                        onClick={() => setLongDrinkGuideOpen(true)}
+                        aria-label="Hosszúital útmutató megnyitása"
+                        title="Hosszúital útmutató"
                       >
                         <HelpIcon />
                       </button>
@@ -2416,6 +2470,50 @@ export function StaffPosPanel({ eventId }) {
                     </div>
                   </article>
                 ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {longDrinkGuideOpen && (
+          <>
+            <div className="modal-backdrop spritzer-guide-backdrop" onClick={() => setLongDrinkGuideOpen(false)} />
+            <div className="spritzer-guide-modal longdrink-guide-modal floating-overlay" role="dialog" aria-modal="true" aria-labelledby="longDrinkGuideTitle">
+              <div className="spritzer-guide-header longdrink-guide-header">
+                <div>
+                  <div className="spritzer-guide-eyebrow">Alkohol + mixer</div>
+                  <h4 id="longDrinkGuideTitle">Hosszúital útmutató</h4>
+                </div>
+                <button type="button" className="secondary-button" onClick={() => setLongDrinkGuideOpen(false)}>
+                  Bezárás
+                </button>
+              </div>
+
+              <div className="longdrink-guide-body">
+                <section className="longdrink-rule-panel" aria-label="Általános hosszúital szabályok">
+                  {LONG_DRINK_RULES.map((rule) => (
+                    <span key={rule}>{rule}</span>
+                  ))}
+                </section>
+
+                <div className="longdrink-guide-grid">
+                  {LONG_DRINK_GUIDE.map((drink) => (
+                    <article key={drink.name} className="longdrink-card">
+                      <LongDrinkGlass tone={drink.tone} />
+                      <div className="longdrink-card-body">
+                        <div className="longdrink-card-title-row">
+                          <h5>{drink.name}</h5>
+                          <span>4 cl + 2,5 dl</span>
+                        </div>
+                        <div className="longdrink-recipe-row">
+                          <span className="longdrink-recipe-pill longdrink-recipe-spirit">{drink.spirit}</span>
+                          <span className="spritzer-recipe-plus">+</span>
+                          <span className="longdrink-recipe-pill longdrink-recipe-mixer">{drink.mixer}</span>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
               </div>
             </div>
           </>

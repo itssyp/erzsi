@@ -1766,6 +1766,18 @@ textarea:disabled {
   transform: translateY(-1px);
 }
 
+.longdrink-help-button {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.longdrink-help-button:hover {
+  border-color: #ea580c;
+  background: #ffedd5;
+  color: #9a3412;
+}
+
 .spritzer-guide-backdrop {
   position: fixed;
   inset: 0;
@@ -1931,6 +1943,254 @@ textarea:disabled {
   color: var(--muted);
   font-size: 0.85rem;
   font-weight: 900;
+}
+
+.longdrink-guide-modal {
+  width: min(880px, calc(100vw - 40px));
+}
+
+.longdrink-guide-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.longdrink-rule-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 16px 18px 0;
+}
+
+.longdrink-rule-panel span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 6px 10px;
+  border: 1px solid #fed7aa;
+  border-radius: var(--radius-md);
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.longdrink-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px 18px 18px;
+}
+
+.longdrink-card {
+  display: grid;
+  grid-template-columns: 78px 1fr;
+  gap: 12px;
+  align-items: center;
+  min-height: 120px;
+  padding: 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #ffffff;
+}
+
+.longdrink-glass {
+  position: relative;
+  width: 72px;
+  height: 104px;
+  overflow: hidden;
+  margin-inline: auto;
+  border: 2px solid rgba(148, 163, 184, 0.72);
+  border-top: 0;
+  border-radius: 3px 3px 8px 8px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.44), rgba(226, 232, 240, 0.12) 46%, rgba(255, 255, 255, 0.34)),
+    rgba(239, 246, 255, 0.48);
+  box-shadow:
+    inset 8px 0 14px rgba(255, 255, 255, 0.28),
+    inset -6px 0 10px rgba(100, 116, 139, 0.12),
+    0 3px 7px rgba(15, 23, 42, 0.08);
+  clip-path: polygon(6% 0, 94% 0, 84% 100%, 16% 100%);
+}
+
+.longdrink-glass::before {
+  content: '';
+  position: absolute;
+  inset: 14px 11px auto auto;
+  z-index: 7;
+  width: 6px;
+  height: 66px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.longdrink-glass::after {
+  content: '';
+  position: absolute;
+  left: 17%;
+  right: 17%;
+  bottom: 0;
+  z-index: 8;
+  height: 2px;
+  background: rgba(100, 116, 139, 0.55);
+}
+
+.longdrink-cup-rim {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 9;
+  height: 7px;
+  border: 2px solid rgba(148, 163, 184, 0.78);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.55);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.10);
+}
+
+.longdrink-cup-band {
+  display: none;
+}
+
+.longdrink-fill {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 0;
+  opacity: 0.56;
+  clip-path: polygon(6% 0, 94% 0, 84% 100%, 16% 100%);
+}
+
+.longdrink-fill-spirit {
+  height: 10%;
+  z-index: 2;
+  background: rgba(217, 119, 6, 0.42);
+}
+
+.longdrink-fill-mixer {
+  height: 62%;
+  bottom: 10%;
+  z-index: 1;
+  background: #bfdbfe;
+}
+
+.longdrink-glass--gin .longdrink-fill-mixer,
+.longdrink-glass--clear .longdrink-fill-mixer {
+  background: #bfdbfe;
+}
+
+.longdrink-glass--pink .longdrink-fill-mixer {
+  background: #fbcfe8;
+}
+
+.longdrink-glass--energy .longdrink-fill-mixer {
+  background: #fde047;
+}
+
+.longdrink-glass--soft .longdrink-fill-mixer {
+  background: #fed7aa;
+}
+
+.longdrink-glass--tropical .longdrink-fill-mixer {
+  background: #fde68a;
+}
+
+.longdrink-glass--cola .longdrink-fill-mixer,
+.longdrink-glass--house .longdrink-fill-mixer {
+  background: #92400e;
+}
+
+.longdrink-measure {
+  position: absolute;
+  left: 27px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: rgba(17, 24, 39, 0.88);
+  font-family: Arial, sans-serif;
+  font-size: 0.48rem;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.longdrink-measure span {
+  width: 18px;
+  height: 1.5px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.longdrink-measure-4 { top: 24px; }
+.longdrink-measure-3 { top: 45px; }
+.longdrink-measure-2 { top: 66px; }
+.longdrink-measure-1 { top: 87px; }
+
+.longdrink-measure strong {
+  font: inherit;
+  min-width: 18px;
+}
+
+.longdrink-card-body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.longdrink-card-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.longdrink-card-title-row h5 {
+  min-width: 0;
+  font-size: 0.94rem;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.longdrink-card-title-row span {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.longdrink-recipe-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.longdrink-recipe-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.longdrink-recipe-spirit {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.longdrink-recipe-mixer {
+  background: #e0f2fe;
+  color: #075985;
 }
 
 .product-grid-scroll {
@@ -6255,6 +6515,20 @@ textarea:disabled {
   .spritzer-guide-grid {
     grid-template-columns: 1fr;
     padding: 12px;
+  }
+
+  .longdrink-rule-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 12px 12px 0;
+  }
+
+  .longdrink-guide-grid {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+
+  .longdrink-card {
+    min-height: 136px;
   }
 
   .pos-workload-mini {
