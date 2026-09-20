@@ -1,5 +1,6 @@
 import { serverTimestamp } from 'firebase/firestore'
 import { normalizeSearchText } from '../../lib/normalize'
+import { sanitizeStockRecipe } from '../stock/stockModels'
 import { sanitizeProductBarcodes } from './productBarcodes'
 
 export const PRODUCT_CATEGORIES = [
@@ -54,6 +55,7 @@ export function buildProductRecord({
   modifierTemplateId,
   isDRS,
   barcodes,
+  stockRecipe,
   actorUid,
 }) {
   return {
@@ -66,6 +68,7 @@ export function buildProductRecord({
     modifierTemplateId: modifierTemplateId || null,
     isDRS: isDRS || false,
     barcodes: sanitizeProductBarcodes(barcodes || []),
+    stockRecipe: sanitizeStockRecipe(stockRecipe),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     updatedBy: actorUid,
@@ -81,6 +84,7 @@ export function buildProductPatch({
   modifierTemplateId,
   isDRS,
   barcodes,
+  stockRecipe,
   actorUid,
 }) {
   return {
@@ -93,6 +97,7 @@ export function buildProductPatch({
     modifierTemplateId: modifierTemplateId || null,
     isDRS: isDRS || false,
     barcodes: sanitizeProductBarcodes(barcodes || []),
+    stockRecipe: sanitizeStockRecipe(stockRecipe),
     updatedAt: serverTimestamp(),
     updatedBy: actorUid,
   }

@@ -17,6 +17,8 @@ export const EVENT_SUBCOLLECTIONS = {
   qrAssignments: 'qrAssignments',
   drsReturns: 'drsReturns',
   productBarcodes: 'productBarcodes',
+  stockItems: 'stockItems',
+  stockMovements: 'stockMovements',
 }
 
 export function getAccountPath(uid) {

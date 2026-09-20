@@ -92,6 +92,20 @@ service cloud.firestore {
         && request.resource.data.updatedBy == request.auth.uid;
     }
 
+    function validPosStockItemUpdate() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['currentQuantity', 'updatedBy', 'updatedAt'])
+        && request.resource.data.currentQuantity is number
+        && request.resource.data.updatedBy == request.auth.uid;
+    }
+
+    function validPosStockMovementCreate() {
+      return request.resource.data.type in ['sale', 'refund']
+        && request.resource.data.actorUid == request.auth.uid
+        && request.resource.data.stockItemId is string
+        && request.resource.data.quantityDelta is number
+        && request.resource.data.createdAt == request.time;
+    }
+
     function isOwnAccount(uid) {
       return isSignedIn() && request.auth.uid == uid;
     }
@@ -166,6 +180,18 @@ service cloud.firestore {
       match /modifierTemplates/{templateId} {
         allow read: if isSignedIn();
         allow write: if canManageCatalog();
+      }
+
+      match /stockItems/{stockItemId} {
+        allow read: if isSignedIn();
+        allow create, delete: if canManageCatalog();
+        allow update: if canManageCatalog() || (canUsePos() && validPosStockItemUpdate());
+      }
+
+      match /stockMovements/{movementId} {
+        allow read: if canManageCatalog() || canUsePos();
+        allow create: if canManageCatalog() || (canUsePos() && validPosStockMovementCreate());
+        allow update, delete: if false;
       }
 
       match /people/{personId} {

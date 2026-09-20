@@ -17,6 +17,10 @@ export function buildLedgerEntryRecord({
   balanceBefore,
   balanceAfter,
   reason = '',
+  // Optional grouping token for bulk operations (e.g. bulk balance adjust).
+  // When present, all entries from a single bulk run share the same id, so
+  // reports can roll them up as one action.
+  correlationId = null,
 }) {
   return {
     type,
@@ -27,6 +31,7 @@ export function buildLedgerEntryRecord({
     balanceAfter,
     currency: 'HUF',
     reason,
+    correlationId,
     createdAt: serverTimestamp(),
   }
 }

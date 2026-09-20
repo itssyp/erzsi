@@ -1,21 +1,30 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
+import { normalizeQrInput } from '../qr/qrLinks'
 
 export function QrCodeCard({ value, label }) {
   const [svgMarkup, setSvgMarkup] = useState('')
   const displayValue = value?.includes('/qr/')
     ? value.split('/qr/').pop()?.replace(/\/+$/, '') || value
     : value
+  let qrPayload = ''
+
+  try {
+    qrPayload = normalizeQrInput(value)
+  } catch {
+    // Preserve rendering for any unexpected legacy value instead of hiding it.
+    qrPayload = value || ''
+  }
 
   useEffect(() => {
     let cancelled = false
 
-    if (!value) {
+    if (!qrPayload) {
       setSvgMarkup('')
       return () => {}
     }
 
-    QRCode.toString(value, {
+    QRCode.toString(qrPayload, {
       type: 'svg',
       width: 256,
       margin: 1,
@@ -36,7 +45,7 @@ export function QrCodeCard({ value, label }) {
     return () => {
       cancelled = true
     }
-  }, [value])
+  }, [qrPayload])
 
   return (
     <section className="panel qr-panel">

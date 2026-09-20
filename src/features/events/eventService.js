@@ -25,6 +25,7 @@ import { AUDIT_TYPES } from '../audit/auditModels'
 import { buildModifierTemplateRecord } from '../modifiers/modifierTemplateModels'
 import { buildProductRecord } from '../products/productModels'
 import { sanitizeProductBarcodes } from '../products/productBarcodes'
+import { buildStockItemRecord } from '../stock/stockModels'
 import {
   EVENT_STATUSES,
   buildEventActivationPatch,
@@ -71,9 +72,10 @@ async function cloneCatalogFromSourceEvent({
   targetEventId,
   actorUid,
 }) {
-  const [templateSnapshot, productSnapshot] = await Promise.all([
+  const [templateSnapshot, productSnapshot, stockItemSnapshot] = await Promise.all([
     getDocs(collection(db, getEventCollectionPath(sourceEventId, EVENT_SUBCOLLECTIONS.modifierTemplates))),
     getDocs(collection(db, getEventCollectionPath(sourceEventId, EVENT_SUBCOLLECTIONS.products))),
+    getDocs(collection(db, getEventCollectionPath(sourceEventId, EVENT_SUBCOLLECTIONS.stockItems))),
   ])
 
   const batch = writeBatch(db)
@@ -107,6 +109,7 @@ async function cloneCatalogFromSourceEvent({
         modifierTemplateId: product.modifierTemplateId || null,
         isDRS: Boolean(product.isDRS),
         barcodes,
+        stockRecipe: product.stockRecipe,
         actorUid,
       }),
     )
@@ -125,6 +128,22 @@ async function cloneCatalogFromSourceEvent({
     })
   })
 
+  stockItemSnapshot.docs.forEach((item) => {
+    const stockItem = item.data()
+
+    batch.set(
+      doc(db, getEventScopedPath(targetEventId, EVENT_SUBCOLLECTIONS.stockItems, item.id)),
+      buildStockItemRecord({
+        name: stockItem.name,
+        unit: stockItem.unit,
+        currentQuantity: 0,
+        lowThreshold: stockItem.lowThreshold || 0,
+        isActive: Boolean(stockItem.isActive),
+        actorUid,
+      }),
+    )
+  })
+
   const auditLogWrite = createAuditLogWrite({
     eventId: targetEventId,
     type: AUDIT_TYPES.eventChange,
@@ -136,6 +155,7 @@ async function cloneCatalogFromSourceEvent({
       sourceEventId,
       clonedModifierTemplateCount: templateSnapshot.size,
       clonedProductCount: productSnapshot.size,
+      clonedStockItemCount: stockItemSnapshot.size,
     },
   })
 

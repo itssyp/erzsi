@@ -19,15 +19,14 @@ import {
 const FILTER_STORAGE_KEY = (eventId) => `kds.stationFilter::${eventId || 'default'}`
 const AUDIO_MUTED_STORAGE_KEY = (eventId) => `kds.audioMuted::${eventId || 'default'}`
 
-// Per-station audio cue: a short triangle-wave chime, synthesized via Web
-// Audio so we don't need to bundle sound files. Different pitches per station
-// mean a chef can tell from across the kitchen which station just got hit.
-const STATION_TONES = {
-  burger: [440],                  // A4 — low single note
-  gyros:  [587.33],               // D5 — mid single note
-  pizza:  [880],                  // A5 — high single note
-  other:  [523.25, 659.25],       // C5 → E5 — quick two-tone
-}
+// New-ticket audio cues — three prerecorded WAVs served from /public/cues.
+// One is picked at random on every new ticket arrival (regardless of station)
+// so the kitchen doesn't hear the same clip repeatedly during a rush.
+const KITCHEN_CUE_URLS = [
+  '/cues/erkezettrendeles.wav',
+  '/cues/figyelem.wav',
+  '/cues/rendeleserekezett.wav',
+]
 
 const nextStatusMap = {
   [FOOD_ORDER_STATUSES.new]: FOOD_ORDER_STATUSES.preparing,
@@ -99,7 +98,8 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
   const boardRef = useRef(null)
   const filterMenuRef = useRef(null)
   const statusChangeRef = useRef(async () => {})
-  const audioCtxRef = useRef(null)
+  // Preloaded HTMLAudioElement pool for the new-ticket cues.
+  const cuePoolRef = useRef([])
   // Tracks whether the current selection came from a user action (tap / arrow
   // key) versus the automatic "pick the first ticket" on load. Used to skip
   // scrollIntoView on the initial auto-pick — otherwise on mobile the board
@@ -160,54 +160,65 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
         FILTER_STORAGE_KEY(eventId),
         JSON.stringify(Array.from(selectedStations)),
       )
-    } catch {}
+    } catch {
+      // localStorage can be unavailable in private or locked-down browser modes.
+    }
   }, [eventId, selectedStations])
 
   // ── Audio cue engine ────────────────────────────────────────────────────
-
-  function getAudioCtx() {
-    if (typeof window === 'undefined') return null
-    if (!audioCtxRef.current) {
-      try {
-        const Ctx = window.AudioContext || window.webkitAudioContext
-        if (!Ctx) return null
-        audioCtxRef.current = new Ctx()
-      } catch {
-        return null
-      }
-    }
-    return audioCtxRef.current
-  }
-
-  function playStationChime(station) {
-    const ctx = getAudioCtx()
-    if (!ctx || ctx.state !== 'running') return
-    const tones = STATION_TONES[station] || STATION_TONES.burger
-    const now = ctx.currentTime
-    tones.forEach((freq, i) => {
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = 'triangle'
-      osc.frequency.value = freq
-      const startAt = now + i * 0.18
-      gain.gain.setValueAtTime(0, startAt)
-      gain.gain.linearRampToValueAtTime(0.25, startAt + 0.02)
-      gain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.4)
-      osc.connect(gain).connect(ctx.destination)
-      osc.start(startAt)
-      osc.stop(startAt + 0.5)
+  // Preload the three WAV cues into a pool of HTMLAudioElement instances so
+  // playback is instant when a new ticket arrives. Cleaned up on unmount.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    cuePoolRef.current = KITCHEN_CUE_URLS.map((url) => {
+      const audio = new Audio(url)
+      audio.preload = 'auto'
+      // Preserve default volume; consumers can still mute via the toggle.
+      return audio
     })
+    return () => {
+      cuePoolRef.current.forEach((audio) => {
+        try {
+          audio.pause()
+          audio.src = ''
+        } catch { /* noop */ }
+      })
+      cuePoolRef.current = []
+    }
+  }, [])
+
+  function playRandomCue() {
+    const pool = cuePoolRef.current
+    if (!pool.length) return
+    const audio = pool[Math.floor(Math.random() * pool.length)]
+    try {
+      // If the same cue is still playing (rapid-fire arrivals), restart it
+      // so we always get a fresh chime rather than silently ignoring it.
+      audio.pause()
+      audio.currentTime = 0
+      const p = audio.play()
+      if (p && typeof p.catch === 'function') p.catch(() => {})
+    } catch { /* noop */ }
   }
 
-  // Browser autoplay policies require a user gesture before audio plays. Wait
-  // for any pointerdown / keydown then resume the context.
+  // Browser autoplay policies require a user gesture before audio plays.
+  // On the first pointerdown / keydown we "warm up" every clip in the pool
+  // (play → pause) which registers a user-initiated play() and unlocks
+  // subsequent playback without further gestures.
   useEffect(() => {
     if (audioUnlocked) return undefined
     const unlock = () => {
-      const ctx = getAudioCtx()
-      if (ctx && ctx.state === 'suspended') {
-        ctx.resume().catch(() => {})
-      }
+      cuePoolRef.current.forEach((audio) => {
+        try {
+          const p = audio.play()
+          if (p && typeof p.then === 'function') {
+            p.then(() => {
+              audio.pause()
+              audio.currentTime = 0
+            }).catch(() => {})
+          }
+        } catch { /* noop */ }
+      })
       setAudioUnlocked(true)
     }
     window.addEventListener('pointerdown', unlock, { once: true })
@@ -237,7 +248,9 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
     if (typeof window === 'undefined') return
     try {
       window.localStorage.setItem(AUDIO_MUTED_STORAGE_KEY(eventId), String(audioMuted))
-    } catch {}
+    } catch {
+      // localStorage can be unavailable in private or locked-down browser modes.
+    }
   }, [eventId, audioMuted])
 
   // Close the filter dropdown when the user taps anywhere outside it (incl.
@@ -305,6 +318,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
       for (const t of allTickets) seenTicketIdsRef.current.add(t.id)
       return
     }
+    let anyChimeWorthy = false
     for (const t of allTickets) {
       if (seenTicketIdsRef.current.has(t.id)) continue
       seenTicketIdsRef.current.add(t.id)
@@ -314,12 +328,14 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
       // Respect the station filter: a pizza-only tablet stays silent for
       // burger tickets even when they come in.
       if (!isAllMode && !selectedStations.has(t.station)) continue
-      playStationChime(t.station)
+      anyChimeWorthy = true
     }
-    // playStationChime is intentionally not in deps — it's a stable function
-    // closure that reads refs and state. Including it would re-run on every
-    // render. Same for getAudioCtx / STATION_TONES.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Play ONE random cue per batch of new tickets — the WAVs are ~half a
+    // second long, so playing several at once would produce overlapping
+    // audio that's harder for the kitchen to parse than a single hit.
+    if (anyChimeWorthy) playRandomCue()
+    // playRandomCue is intentionally not in deps — it's a stable function
+    // reading refs. Including it would re-run on every render.
   }, [allTickets, audioMuted, audioUnlocked, isAllMode, selectedStations])
 
   // Visibility: hide a ticket once it has been `delivered` for more than the
@@ -449,6 +465,10 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
 
   async function handleStatusChange(ticket, nextStatus) {
     if (!nextStatus) return
+    if (!actorUid) {
+      setErrorMessage('A felhasználói munkamenet még tölt. Próbáld újra egy pillanat múlva.')
+      return
+    }
     setPendingOrderId(ticket.id)
     setErrorMessage('')
     try {
@@ -461,7 +481,8 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
         actorName,
       })
     } catch (error) {
-      setErrorMessage(error.message)
+      console.error('Kitchen status update failed', error)
+      setErrorMessage(error.message || 'Nem sikerült frissíteni a rendelés állapotát.')
     } finally {
       setPendingOrderId('')
     }
@@ -601,9 +622,10 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
               <div className="kds-column-body">
                 {columnTickets.map((ticket) => {
                   const order = ticket.order
+                  const ticketStatus = ticket.status || status || FOOD_ORDER_STATUSES.new
                   const minutesOpen = getMinutesOpen(order.createdAt)
-                  const nextStatus = nextStatusMap[status]
-                  const late = isLate(status, minutesOpen)
+                  const nextStatus = nextStatusMap[ticketStatus]
+                  const late = isLate(ticketStatus, minutesOpen)
                   const stationColor = KITCHEN_STATION_COLORS[ticket.station]
                   const stationLabel = KITCHEN_STATION_LABELS[ticket.station]
                   const isSplitOrder = ticket.totalCount > 1
@@ -626,7 +648,7 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                     <article
                       key={ticket.id}
                       data-ticket-id={ticket.id}
-                      className={`kds-ticket receipt-container kds-ticket--${ticket.station}${late ? ' tone-late' : ''} tone-${status === FOOD_ORDER_STATUSES.delivered ? 'delivered' : status === FOOD_ORDER_STATUSES.ready ? 'ready' : status === FOOD_ORDER_STATUSES.preparing ? 'preparing' : 'new'}${selectedOrderId === ticket.id ? ' selected' : ''}`}
+                      className={`kds-ticket receipt-container kds-ticket--${ticket.station}${late ? ' tone-late' : ''} tone-${ticketStatus === FOOD_ORDER_STATUSES.delivered ? 'delivered' : ticketStatus === FOOD_ORDER_STATUSES.ready ? 'ready' : ticketStatus === FOOD_ORDER_STATUSES.preparing ? 'preparing' : 'new'}${selectedOrderId === ticket.id ? ' selected' : ''}`}
                       style={{ borderLeft: `5px solid ${stationColor}` }}
                       onClick={() => { userInteractedRef.current = true; setSelectedOrderId(ticket.id) }}
                     >
@@ -652,8 +674,8 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                         <div className="kds-ticket-meta">
                           <span className="kds-ticket-time">{formatTimestamp(order.createdAt)}</span>
                           <div className="kds-ticket-meta-right">
-                            <span className={`kds-status-badge ${status}${late ? ' late' : ''}`}>
-                              {late ? 'KÉSÉS' : statusLabelMap[status]}
+                            <span className={`kds-status-badge ${ticketStatus}${late ? ' late' : ''}`}>
+                              {late ? 'KÉSÉS' : statusLabelMap[ticketStatus]}
                             </span>
                             {minutesOpen !== null && (
                               <span className={`kds-ticket-age${minutesOpen >= 12 ? ' urgent' : ''}`}>
@@ -697,9 +719,9 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
                             className="primary-button"
                             style={{ width: '100%', padding: '10px', fontWeight: 800, fontSize: '0.85rem' }}
                             onClick={(event) => { event.stopPropagation(); handleStatusChange(ticket, nextStatus) }}
-                            disabled={pendingOrderId === ticket.id}
+                            disabled={pendingOrderId === ticket.id || !actorUid}
                           >
-                            {pendingOrderId === ticket.id ? '...' : actionLabelMap[status]}
+                            {pendingOrderId === ticket.id ? '...' : actionLabelMap[ticketStatus]}
                           </button>
                         ) : (
                           <div style={{ textAlign: 'center', color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 700 }}>

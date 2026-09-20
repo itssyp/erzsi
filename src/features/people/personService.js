@@ -35,6 +35,7 @@ import {
 import { buildAccountEventLinkMetadataPatch } from '../auth/accountModels'
 
 const topUpPersonBalanceCallable = httpsCallable(functions, 'topUpPersonBalance')
+const bulkAdjustPersonBalanceCallable = httpsCallable(functions, 'bulkAdjustPersonBalance')
 
 function normalizeImportedAttendeeType(value) {
   const normalized = `${value ?? ''}`.trim().toLowerCase()
@@ -486,4 +487,23 @@ export async function adjustPersonBalance({ eventId, actorUid, personId, amount,
     auditType: AUDIT_TYPES.manualBalanceAdjustment,
     summary: `Manual balance adjustment applied to person ${personId}`,
   })
+}
+
+/**
+ * Apply one balance delta to many personas at once. `correlationId` should be
+ * a stable id generated once per user-initiated bulk action — the Cloud
+ * Function uses it for idempotency, so double-clicks / retries collapse to
+ * a single application.
+ *
+ * Returns { applied, skipped, failedChunks, correlationId, alreadyProcessed }.
+ */
+export async function bulkAdjustPersonBalance({ eventId, personIds, amount, reason = '', correlationId }) {
+  const result = await bulkAdjustPersonBalanceCallable({
+    eventId,
+    personIds,
+    amount,
+    reason,
+    correlationId,
+  })
+  return result.data
 }

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { read, utils } from 'xlsx'
+import { read, utils, writeFile } from 'xlsx'
 import { formatHuf, parseHufInteger } from '../../lib/money'
 import { PRODUCT_CATEGORIES, normalizeProductCategory } from '../products/productModels'
 import { clearProducts, deleteProduct, importProducts, saveProduct, subscribeToProducts } from '../products/productService'
 import { normalizeProductBarcode, parseBarcodeList } from '../products/productBarcodes'
 import { deleteModifierTemplate, saveModifierTemplate, subscribeToModifierTemplates } from '../modifiers/modifierTemplateService'
+import { applyManualStockMovement, importStockItems, saveStockItem, subscribeToStockItems, subscribeToStockMovements } from '../stock/stockService'
+import { parseStockInteger, STOCK_MOVEMENT_TYPES, STOCK_UNIT_LABELS, STOCK_UNITS } from '../stock/stockModels'
 
 const emptyProductState = {
   productId: null,
@@ -16,6 +18,31 @@ const emptyProductState = {
   modifierTemplateId: '',
   isDRS: false,
   barcodes: [],
+  stockMode: 'none',
+  selfStockUnit: STOCK_UNITS.piece,
+  selfStockQuantity: '0',
+  selfStockLowThreshold: '0',
+  stockRecipe: {
+    enabled: false,
+    components: [],
+    choiceGroups: [],
+  },
+}
+
+const emptyStockItemState = {
+  stockItemId: null,
+  name: '',
+  unit: STOCK_UNITS.piece,
+  currentQuantity: '0',
+  lowThreshold: '0',
+  isActive: true,
+}
+
+const emptyStockMovementState = {
+  stockItemId: '',
+  amount: '',
+  countedQuantity: '',
+  reason: '',
 }
 
 const PRODUCT_AVAILABILITY = {
@@ -52,6 +79,228 @@ const PRODUCT_IMPORT_HEADER_ALIASES = {
   barcodes: 'barcodes',
   vonalkod: 'barcodes',
   vonalkodok: 'barcodes',
+  stockmode: 'stockMode',
+  keszletmod: 'stockMode',
+  keszletkovetes: 'stockMode',
+  stockquantity: 'stockQuantity',
+  keszletmennyiseg: 'stockQuantity',
+  stocklowthreshold: 'stockLowThreshold',
+  lowthreshold: 'stockLowThreshold',
+  alacsonyjelzes: 'stockLowThreshold',
+  stockunit: 'stockUnit',
+  keszletegyseg: 'stockUnit',
+  stockrecipe: 'stockRecipe',
+  recept: 'stockRecipe',
+  stockchoicegroups: 'stockChoiceGroups',
+  valasztasok: 'stockChoiceGroups',
+}
+
+const STOCK_IMPORT_REQUIRED_HEADERS = ['name', 'unit', 'currentQuantity']
+const STOCK_IMPORT_HEADER_ALIASES = {
+  name: 'name',
+  nev: 'name',
+  unit: 'unit',
+  egyseg: 'unit',
+  currentquantity: 'currentQuantity',
+  currentstock: 'currentQuantity',
+  quantity: 'currentQuantity',
+  jelenlegimennyiseg: 'currentQuantity',
+  keszlet: 'currentQuantity',
+  lowthreshold: 'lowThreshold',
+  low: 'lowThreshold',
+  alacsonyjelzes: 'lowThreshold',
+  minimum: 'lowThreshold',
+  active: 'active',
+  aktiv: 'active',
+  isactive: 'active',
+}
+
+const STOCK_EDITOR_MODES = {
+  none: 'none',
+  self: 'self',
+  recipe: 'recipe',
+  choice: 'choice',
+}
+
+const LONG_DRINK_RECIPE_PRESETS = [
+  { label: 'Vodka-szóda', spirit: 'Vodka', mixer: 'Szóda' },
+  { label: 'Vodka-hell', spirit: 'Vodka', mixer: 'Hell' },
+  { label: 'Vodka-üdítő', spirit: 'Vodka', mixer: 'Üdítő' },
+  { label: 'Gin-tonic', spirit: 'Gin', mixer: 'Tonic' },
+  { label: 'Gin-fizz', spirit: 'Gin', mixer: 'Szóda' },
+  { label: 'Rum-kóla', spirit: 'Rum', mixer: 'Kóla' },
+  { label: 'Whiskey-hell', spirit: 'Whiskey', mixer: 'Hell' },
+  { label: 'Jager-hell', spirit: 'Jager', mixer: 'Hell' },
+]
+
+function parseImportStockMode(value) {
+  const normalized = normalizeImportHeader(value)
+  if (!normalized || normalized === 'none' || normalized === 'nincs' || normalized === 'no') {
+    return 'none'
+  }
+  if (['self', 'sajat', 'sajatkeszlet', 'product', 'termek'].includes(normalized)) {
+    return 'self'
+  }
+  if (['recipe', 'recept', 'ingredients', 'hozzavalok'].includes(normalized)) {
+    return 'recipe'
+  }
+  if (['choice', 'valasztas', 'valasztassal', 'valasztasok'].includes(normalized)) {
+    return 'choice'
+  }
+  return null
+}
+
+function parseImportStockUnit(value, fallback = STOCK_UNITS.piece) {
+  const normalized = normalizeImportHeader(value)
+  if (!normalized) return fallback
+  if (['ml', 'milliliter'].includes(normalized)) return STOCK_UNITS.ml
+  if (['db', 'piece', 'pieces', 'darab'].includes(normalized)) return STOCK_UNITS.piece
+  return null
+}
+
+function parseImportStockQuantity(value, fallback = 0) {
+  if (String(value ?? '').trim() === '') return fallback
+  const normalized = String(value ?? '').replace(/\s+/g, '')
+  return /^-?\d+$/.test(normalized) ? Number.parseInt(normalized, 10) : null
+}
+
+function parseImportRecipeComponent(rawValue, fallbackUnit = STOCK_UNITS.ml) {
+  const text = String(rawValue || '').trim()
+  const separatorIndex = text.lastIndexOf(':')
+  if (separatorIndex <= 0) {
+    return null
+  }
+
+  const stockItemName = text.slice(0, separatorIndex).trim()
+  const quantityText = text.slice(separatorIndex + 1).trim()
+  const quantityMatch = quantityText.match(/^(\d+)\s*([a-zA-ZáéíóöőúüűÁÉÍÓÖŐÚÜŰ]*)$/)
+  if (!stockItemName || !quantityMatch) {
+    return null
+  }
+
+  const unit = parseImportStockUnit(quantityMatch[2], fallbackUnit)
+  if (!unit) {
+    return null
+  }
+
+  return {
+    stockItemName,
+    quantityPerUnit: parseStockInteger(quantityMatch[1], 0),
+    unit,
+  }
+}
+
+function parseImportRecipeList(value) {
+  return String(value || '')
+    .split(';')
+    .map((part) => parseImportRecipeComponent(part))
+    .filter((component) => component && component.quantityPerUnit > 0)
+}
+
+function parseImportChoiceGroups(value) {
+  return String(value || '')
+    .split(';')
+    .map((groupText) => {
+      const [labelPart, optionsPart] = groupText.split('=')
+      const label = String(labelPart || '').trim()
+      const options = String(optionsPart || '')
+        .split('|')
+        .map((optionText) => {
+          const component = parseImportRecipeComponent(optionText)
+          if (!component) return null
+          return {
+            label: component.stockItemName,
+            components: [component],
+          }
+        })
+        .filter(Boolean)
+
+      if (!label || !options.length) {
+        return null
+      }
+
+      return { label, options }
+    })
+    .filter(Boolean)
+}
+
+function normalizeNameForMatch(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+}
+
+function getStockItemById(stockItems, stockItemId) {
+  return stockItems.find((item) => item.id === stockItemId) || null
+}
+
+function getStockItemByName(stockItems, name) {
+  const normalizedName = normalizeNameForMatch(name)
+  return stockItems.find((item) => normalizeNameForMatch(item.name) === normalizedName) || null
+}
+
+function isSelfStockRecipe(product, stockItems) {
+  const recipe = product?.stockRecipe
+  const components = recipe?.components || []
+  const choiceGroups = recipe?.choiceGroups || []
+
+  if (!recipe?.enabled || components.length !== 1 || choiceGroups.length > 0) {
+    return false
+  }
+
+  const component = components[0]
+  if (parseStockInteger(component.quantityPerUnit, 0) !== 1) {
+    return false
+  }
+
+  const stockItem = getStockItemById(stockItems, component.stockItemId)
+  const stockName = stockItem?.name || component.stockItemName
+  return !stockName || normalizeNameForMatch(stockName) === normalizeNameForMatch(product.name)
+}
+
+function inferStockMode(product, stockItems) {
+  const recipe = product?.stockRecipe
+  if (!recipe?.enabled) {
+    return STOCK_EDITOR_MODES.none
+  }
+  if (isSelfStockRecipe(product, stockItems)) {
+    return STOCK_EDITOR_MODES.self
+  }
+  if ((recipe.choiceGroups || []).length > 0) {
+    return STOCK_EDITOR_MODES.choice
+  }
+  return STOCK_EDITOR_MODES.recipe
+}
+
+function formatRecipeComponentsForExport(components = [], stockItems = []) {
+  return components
+    .map((component) => {
+      const stockItem = getStockItemById(stockItems, component.stockItemId)
+      const unit = STOCK_UNIT_LABELS[stockItem?.unit] || stockItem?.unit || ''
+      return `${component.stockItemName || stockItem?.name || ''}:${component.quantityPerUnit || 0}${unit}`
+    })
+    .join('; ')
+}
+
+function formatChoiceGroupsForExport(choiceGroups = [], stockItems = []) {
+  return choiceGroups
+    .map((group) => {
+      const options = (group.options || [])
+        .map((option) => {
+          const component = option.components?.[0]
+          if (!component) return null
+          const stockItem = getStockItemById(stockItems, component.stockItemId)
+          const unit = STOCK_UNIT_LABELS[stockItem?.unit] || stockItem?.unit || ''
+          return `${option.label || component.stockItemName}:${component.quantityPerUnit || 0}${unit}`
+        })
+        .filter(Boolean)
+        .join('|')
+      return options ? `${group.label || 'Választás'}=${options}` : null
+    })
+    .filter(Boolean)
+    .join('; ')
 }
 
 function createIngredientField(label = '') {
@@ -67,6 +316,31 @@ function createExtraField({ label = '', price = '', maxQuantity = '1' } = {}) {
     label,
     price,
     maxQuantity,
+  }
+}
+
+function createRecipeComponent() {
+  return {
+    id: crypto.randomUUID(),
+    stockItemId: '',
+    stockItemName: '',
+    quantityPerUnit: '',
+  }
+}
+
+function createRecipeOption() {
+  return {
+    id: crypto.randomUUID(),
+    label: '',
+    components: [createRecipeComponent()],
+  }
+}
+
+function createRecipeChoiceGroup() {
+  return {
+    id: crypto.randomUUID(),
+    label: '',
+    options: [createRecipeOption()],
   }
 }
 
@@ -178,11 +452,35 @@ async function parseImportedProducts(file) {
     const barcodes = headerMap.barcodes === undefined
       ? []
       : parseBarcodeList(row[headerMap.barcodes])
+    const stockMode = headerMap.stockMode === undefined
+      ? 'none'
+      : parseImportStockMode(row[headerMap.stockMode])
+    const stockUnit = headerMap.stockUnit === undefined
+      ? STOCK_UNITS.piece
+      : parseImportStockUnit(row[headerMap.stockUnit], STOCK_UNITS.piece)
+    const stockQuantity = headerMap.stockQuantity === undefined
+      ? 0
+      : parseImportStockQuantity(row[headerMap.stockQuantity], 0)
+    const stockLowThreshold = headerMap.stockLowThreshold === undefined
+      ? 0
+      : parseImportStockQuantity(row[headerMap.stockLowThreshold], 0)
+    const stockRecipeComponents = headerMap.stockRecipe === undefined
+      ? []
+      : parseImportRecipeList(row[headerMap.stockRecipe])
+    const stockChoiceGroups = headerMap.stockChoiceGroups === undefined
+      ? []
+      : parseImportChoiceGroups(row[headerMap.stockChoiceGroups])
     const rowValues = [
       row[headerMap.name],
       row[headerMap.drs],
       row[headerMap.price],
       row[headerMap.category],
+      row[headerMap.stockMode],
+      row[headerMap.stockQuantity],
+      row[headerMap.stockLowThreshold],
+      row[headerMap.stockUnit],
+      row[headerMap.stockRecipe],
+      row[headerMap.stockChoiceGroups],
     ]
     const isBlankRow = rowValues.every((value) => String(value ?? '').trim() === '')
 
@@ -208,6 +506,42 @@ async function parseImportedProducts(file) {
       rowErrors.push('drs must be true or false')
     }
 
+    if (!stockMode) {
+      rowErrors.push('stock_mode must be none, self, recipe, or choice')
+    }
+
+    if (!stockUnit) {
+      rowErrors.push('stock_unit must be db or ml')
+    }
+
+    if (stockQuantity === null) {
+      rowErrors.push('stock_quantity must be a whole number')
+    }
+
+    if (stockLowThreshold === null) {
+      rowErrors.push('stock_low_threshold must be a whole number')
+    }
+
+    if (stockMode === 'self' && stockQuantity < 0) {
+      rowErrors.push('stock_quantity must be zero or positive')
+    }
+
+    if (stockLowThreshold < 0) {
+      rowErrors.push('stock_low_threshold must be zero or positive')
+    }
+
+    if ((stockMode === 'recipe' || stockMode === 'choice') && headerMap.stockRecipe !== undefined && String(row[headerMap.stockRecipe] || '').trim() && !stockRecipeComponents.length) {
+      rowErrors.push('stock_recipe must use "Stock item:40ml; Other item:250ml" format')
+    }
+
+    if (stockMode === 'choice' && headerMap.stockChoiceGroups !== undefined && String(row[headerMap.stockChoiceGroups] || '').trim() && !stockChoiceGroups.length) {
+      rowErrors.push('stock_choice_groups must use "Question=Option:100ml|Other:100ml" format')
+    }
+
+    if (stockMode === 'choice' && !stockChoiceGroups.length) {
+      rowErrors.push('choice stock_mode requires stock_choice_groups')
+    }
+
     try {
       barcodes.forEach((barcode) => normalizeProductBarcode(barcode))
     } catch (error) {
@@ -225,6 +559,16 @@ async function parseImportedProducts(file) {
       price,
       isDRS,
       barcodes,
+      stockImport: stockMode === 'none'
+        ? null
+        : {
+            mode: stockMode,
+            unit: stockUnit,
+            quantity: stockQuantity,
+            lowThreshold: stockLowThreshold,
+            components: stockRecipeComponents,
+            choiceGroups: stockChoiceGroups,
+          },
     })
   })
 
@@ -237,6 +581,104 @@ async function parseImportedProducts(file) {
   }
 
   return importedProducts
+}
+
+async function parseImportedStockItems(file) {
+  const buffer = await file.arrayBuffer()
+  const workbook = read(buffer, { type: 'array' })
+  const firstSheetName = workbook.SheetNames[0]
+
+  if (!firstSheetName) {
+    throw new Error('A kiválasztott Excel fájlban nincs munkalap.')
+  }
+
+  const rows = utils.sheet_to_json(workbook.Sheets[firstSheetName], {
+    header: 1,
+    raw: false,
+    defval: '',
+    blankrows: false,
+  })
+
+  if (!rows.length) {
+    throw new Error('A kiválasztott Excel munkalap üres.')
+  }
+
+  const headerMap = {}
+  rows[0].forEach((cell, index) => {
+    const normalizedHeader = STOCK_IMPORT_HEADER_ALIASES[normalizeImportHeader(cell)]
+    if (normalizedHeader && headerMap[normalizedHeader] === undefined) {
+      headerMap[normalizedHeader] = index
+    }
+  })
+
+  const missingHeaders = STOCK_IMPORT_REQUIRED_HEADERS.filter((header) => headerMap[header] === undefined)
+  if (missingHeaders.length) {
+    throw new Error(`Hiányzó kötelező oszlopok: ${missingHeaders.join(', ')}.`)
+  }
+
+  const errors = []
+  const importedStockItems = []
+  const seenStockNames = new Map()
+
+  rows.slice(1).forEach((row, index) => {
+    const rowNumber = index + 2
+    const name = String(row[headerMap.name] ?? '').trim()
+    const normalizedName = normalizeNameForMatch(name)
+    const unit = parseImportStockUnit(row[headerMap.unit])
+    const currentQuantity = parseImportStockQuantity(row[headerMap.currentQuantity], 0)
+    const lowThreshold = headerMap.lowThreshold === undefined
+      ? 0
+      : parseImportStockQuantity(row[headerMap.lowThreshold], 0)
+    const isActive = headerMap.active === undefined
+      ? true
+      : parseImportBoolean(row[headerMap.active])
+    const rowValues = [
+      row[headerMap.name],
+      row[headerMap.unit],
+      row[headerMap.currentQuantity],
+      row[headerMap.lowThreshold],
+      row[headerMap.active],
+    ]
+
+    if (rowValues.every((value) => String(value ?? '').trim() === '')) {
+      return
+    }
+
+    const rowErrors = []
+    if (!name) rowErrors.push('name kötelező')
+    if (normalizedName && seenStockNames.has(normalizedName)) {
+      rowErrors.push(`duplikált készletnév, előző sor: ${seenStockNames.get(normalizedName)}`)
+    }
+    if (!unit) rowErrors.push('unit csak db vagy ml lehet')
+    if (currentQuantity === null) rowErrors.push('current_quantity egész szám legyen')
+    if (lowThreshold === null) rowErrors.push('low_threshold egész szám legyen')
+    if (lowThreshold < 0) rowErrors.push('low_threshold nem lehet negatív')
+    if (isActive === null) rowErrors.push('active true vagy false legyen')
+
+    if (rowErrors.length) {
+      errors.push(`Sor ${rowNumber}: ${rowErrors.join('; ')}.`)
+      return
+    }
+
+    importedStockItems.push({
+      name,
+      unit,
+      currentQuantity,
+      lowThreshold,
+      isActive,
+    })
+    seenStockNames.set(normalizedName, rowNumber)
+  })
+
+  if (!importedStockItems.length && !errors.length) {
+    throw new Error('A kiválasztott Excel munkalapon nincs készletsor.')
+  }
+
+  if (errors.length) {
+    throw new Error(errors.slice(0, 8).join(' '))
+  }
+
+  return importedStockItems
 }
 
 function productMatchesQuery(product, query, templateName) {
@@ -317,8 +759,12 @@ function ensureAtLeastOneExtra(fields) {
 export function ProductManagementPanel({ eventId, actorUid }) {
   const [products, setProducts] = useState([])
   const [modifierTemplates, setModifierTemplates] = useState([])
+  const [stockItems, setStockItems] = useState([])
+  const [stockMovements, setStockMovements] = useState([])
   const [productState, setProductState] = useState(emptyProductState)
   const [templateState, setTemplateState] = useState(emptyTemplateState)
+  const [stockItemState, setStockItemState] = useState(emptyStockItemState)
+  const [stockMovementState, setStockMovementState] = useState(emptyStockMovementState)
   const [productQuery, setProductQuery] = useState('')
   const [templateQuery, setTemplateQuery] = useState('')
   const [activeCatalogSection, setActiveCatalogSection] = useState('products')
@@ -326,8 +772,10 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   const [pending, setPending] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [importFileName, setImportFileName] = useState('')
+  const [stockImportFileName, setStockImportFileName] = useState('')
   const [barcodeInput, setBarcodeInput] = useState('')
   const importInputRef = useRef(null)
+  const stockImportInputRef = useRef(null)
   const barcodeScannerTimerRef = useRef(null)
   const barcodeScannerBufferRef = useRef('')
   const barcodeScannerLastKeyAtRef = useRef(0)
@@ -376,6 +824,19 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   useEffect(() => {
     return subscribeToModifierTemplates(eventId, setModifierTemplates, (error) => setErrorMessage(error.message))
   }, [eventId])
+
+  useEffect(() => {
+    return subscribeToStockItems(eventId, setStockItems, (error) => setErrorMessage(error.message))
+  }, [eventId])
+
+  useEffect(() => {
+    if (activeCatalogSection !== 'stock') {
+      setStockMovements([])
+      return () => {}
+    }
+
+    return subscribeToStockMovements(eventId, setStockMovements, (error) => setErrorMessage(error.message))
+  }, [activeCatalogSection, eventId])
 
   const restoreScannerTarget = useCallback(() => {
     const target = barcodeScannerTargetRef.current
@@ -626,12 +1087,36 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   async function handleProductSubmit(event) {
     event.preventDefault()
     const isEditing = Boolean(productState.productId)
+    const stockMode = productState.stockMode || STOCK_EDITOR_MODES.none
+    const stockRecipe = stockMode === STOCK_EDITOR_MODES.none || stockMode === STOCK_EDITOR_MODES.self
+      ? {
+          enabled: false,
+          components: [],
+          choiceGroups: [],
+        }
+      : {
+          ...(productState.stockRecipe || emptyProductState.stockRecipe),
+          enabled: true,
+          choiceGroups: stockMode === STOCK_EDITOR_MODES.choice
+            ? productState.stockRecipe?.choiceGroups || []
+            : [],
+        }
+    const stockImport = stockMode === STOCK_EDITOR_MODES.self
+      ? {
+          mode: 'self',
+          unit: productState.selfStockUnit || STOCK_UNITS.piece,
+          quantity: productState.selfStockQuantity,
+          lowThreshold: productState.selfStockLowThreshold,
+        }
+      : null
 
     await runAction(() =>
       saveProduct({
         eventId,
         actorUid,
         ...productState,
+        stockRecipe,
+        stockImport,
       }),
     )
 
@@ -685,6 +1170,42 @@ export function ProductManagementPanel({ eventId, actorUid }) {
     if (importInputRef.current) {
       importInputRef.current.value = ''
     }
+  }
+
+  function handleProductExport() {
+    const rows = products
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name, 'hu'))
+      .map((product) => {
+        const stockMode = inferStockMode(product, stockItems)
+        const recipe = product.stockRecipe || {}
+        const selfComponent = recipe.components?.[0]
+        const selfStockItem = stockMode === STOCK_EDITOR_MODES.self
+          ? getStockItemById(stockItems, selfComponent?.stockItemId)
+          : null
+
+        return {
+          name: product.name || '',
+          drs: Boolean(product.isDRS),
+          price: product.price ?? 0,
+          category: normalizeProductCategory(product.category),
+          barcodes: (product.barcodes || []).join(', '),
+          stock_mode: stockMode,
+          stock_quantity: stockMode === STOCK_EDITOR_MODES.self ? selfStockItem?.currentQuantity ?? 0 : '',
+          stock_low_threshold: stockMode === STOCK_EDITOR_MODES.self ? selfStockItem?.lowThreshold ?? 0 : '',
+          stock_unit: stockMode === STOCK_EDITOR_MODES.self ? STOCK_UNIT_LABELS[selfStockItem?.unit] || selfStockItem?.unit || 'db' : '',
+          stock_recipe: stockMode === STOCK_EDITOR_MODES.recipe || stockMode === STOCK_EDITOR_MODES.choice
+            ? formatRecipeComponentsForExport(recipe.components || [], stockItems)
+            : '',
+          stock_choice_groups: stockMode === STOCK_EDITOR_MODES.choice
+            ? formatChoiceGroupsForExport(recipe.choiceGroups || [], stockItems)
+            : '',
+        }
+      })
+    const worksheet = utils.json_to_sheet(rows)
+    const workbook = utils.book_new()
+    utils.book_append_sheet(workbook, worksheet, 'products')
+    writeFile(workbook, `products-${eventId}.xlsx`)
   }
 
   async function handleClearProducts() {
@@ -758,6 +1279,11 @@ export function ProductManagementPanel({ eventId, actorUid }) {
   function loadProductIntoForm(product) {
     clearBarcodeScannerTimer()
     setBarcodeInput('')
+    const stockMode = inferStockMode(product, stockItems)
+    const selfComponent = product.stockRecipe?.components?.[0]
+    const selfStockItem = stockMode === STOCK_EDITOR_MODES.self
+      ? getStockItemById(stockItems, selfComponent?.stockItemId)
+      : null
     setProductState({
       productId: product.id,
       name: product.name,
@@ -768,8 +1294,127 @@ export function ProductManagementPanel({ eventId, actorUid }) {
       modifierTemplateId: product.modifierTemplateId || '',
       isDRS: product.isDRS || false,
       barcodes: product.barcodes || [],
+      stockMode,
+      selfStockUnit: selfStockItem?.unit || STOCK_UNITS.piece,
+      selfStockQuantity: String(selfStockItem?.currentQuantity ?? 0),
+      selfStockLowThreshold: String(selfStockItem?.lowThreshold ?? 0),
+      stockRecipe: product.stockRecipe || emptyProductState.stockRecipe,
     })
     setStatusMessage('')
+  }
+
+  function loadStockItemIntoForm(stockItem) {
+    setStockItemState({
+      stockItemId: stockItem.id,
+      name: stockItem.name || '',
+      unit: stockItem.unit || STOCK_UNITS.piece,
+      currentQuantity: String(stockItem.currentQuantity ?? 0),
+      lowThreshold: String(stockItem.lowThreshold ?? 0),
+      isActive: stockItem.isActive !== false,
+    })
+    setStockMovementState((current) => ({
+      ...current,
+      stockItemId: stockItem.id,
+    }))
+  }
+
+  async function handleStockItemSubmit(event) {
+    event.preventDefault()
+    const isEditing = Boolean(stockItemState.stockItemId)
+
+    await runAction(() =>
+      saveStockItem({
+        eventId,
+        actorUid,
+        ...stockItemState,
+      }),
+    )
+
+    setStockItemState(emptyStockItemState)
+    setStatusMessage(isEditing ? 'A készletelem frissítve lett.' : 'A készletelem létrejött.')
+  }
+
+  async function handleStockExcelImport(event) {
+    const file = event.target.files?.[0]
+
+    if (!file) {
+      return
+    }
+
+    setStockImportFileName(file.name)
+
+    await runAction(async () => {
+      const rows = await parseImportedStockItems(file)
+      const result = await importStockItems({
+        eventId,
+        actorUid,
+        rows,
+      })
+
+      setStatusMessage(`${result.importedCount} készletelem importálva. ${result.movementCount} korrekciós mozgás rögzítve.`)
+      setStockImportFileName('')
+
+      if (stockImportInputRef.current) {
+        stockImportInputRef.current.value = ''
+      }
+    })
+
+    if (stockImportInputRef.current) {
+      stockImportInputRef.current.value = ''
+    }
+  }
+
+  function handleStockExcelExport() {
+    const rows = stockItems
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name, 'hu'))
+      .map((stockItem) => ({
+        name: stockItem.name || '',
+        unit: STOCK_UNIT_LABELS[stockItem.unit] || stockItem.unit || 'db',
+        current_quantity: stockItem.currentQuantity ?? 0,
+        low_threshold: stockItem.lowThreshold ?? 0,
+        active: stockItem.isActive !== false,
+      }))
+    const worksheet = utils.json_to_sheet(rows)
+    const workbook = utils.book_new()
+    utils.book_append_sheet(workbook, worksheet, 'stock')
+    writeFile(workbook, `stock-${eventId}.xlsx`)
+  }
+
+  async function handleManualStockAdd(event) {
+    event.preventDefault()
+
+    await runAction(() =>
+      applyManualStockMovement({
+        eventId,
+        actorUid,
+        stockItemId: stockMovementState.stockItemId,
+        type: STOCK_MOVEMENT_TYPES.manualAdd,
+        amount: stockMovementState.amount,
+        reason: stockMovementState.reason || 'Készlet hozzáadás',
+      }),
+    )
+
+    setStockMovementState(emptyStockMovementState)
+    setStatusMessage('A készlet hozzáadva.')
+  }
+
+  async function handleManualStockCorrection(event) {
+    event.preventDefault()
+
+    await runAction(() =>
+      applyManualStockMovement({
+        eventId,
+        actorUid,
+        stockItemId: stockMovementState.stockItemId,
+        type: STOCK_MOVEMENT_TYPES.manualCorrection,
+        countedQuantity: stockMovementState.countedQuantity,
+        reason: stockMovementState.reason || 'Számolt készlet korrekció',
+      }),
+    )
+
+    setStockMovementState(emptyStockMovementState)
+    setStatusMessage('A készlet korrigálva.')
   }
 
   function loadTemplateIntoForm(template) {
@@ -790,6 +1435,123 @@ export function ProductManagementPanel({ eventId, actorUid }) {
       ),
     })
     setStatusMessage('')
+  }
+
+  function updateRecipe(updater) {
+    setProductState((current) => ({
+      ...current,
+      stockRecipe: updater(current.stockRecipe || emptyProductState.stockRecipe),
+    }))
+  }
+
+  function updateStockMode(mode) {
+    setProductState((current) => {
+      if (mode === STOCK_EDITOR_MODES.none) {
+        return {
+          ...current,
+          stockMode: mode,
+          stockRecipe: {
+            enabled: false,
+            components: [],
+            choiceGroups: [],
+          },
+        }
+      }
+
+      if (mode === STOCK_EDITOR_MODES.self) {
+        const stockItem = getStockItemByName(stockItems, current.name)
+        return {
+          ...current,
+          stockMode: mode,
+          selfStockUnit: stockItem?.unit || current.selfStockUnit || STOCK_UNITS.piece,
+          selfStockQuantity: String(stockItem?.currentQuantity ?? current.selfStockQuantity ?? 0),
+          selfStockLowThreshold: String(stockItem?.lowThreshold ?? current.selfStockLowThreshold ?? 0),
+          stockRecipe: {
+            enabled: false,
+            components: [],
+            choiceGroups: [],
+          },
+        }
+      }
+
+      return {
+        ...current,
+        stockMode: mode,
+        stockRecipe: {
+          ...(current.stockRecipe || emptyProductState.stockRecipe),
+          enabled: true,
+          components: current.stockRecipe?.components || [],
+          choiceGroups: mode === STOCK_EDITOR_MODES.choice
+            ? current.stockRecipe?.choiceGroups || []
+            : [],
+        },
+      }
+    })
+  }
+
+  function buildPresetComponent(name, quantityPerUnit) {
+    const stockItem = getStockItemByName(stockItems, name)
+    return {
+      id: crypto.randomUUID(),
+      stockItemId: stockItem?.id || '',
+      stockItemName: stockItem?.name || name,
+      quantityPerUnit: String(quantityPerUnit),
+    }
+  }
+
+  function applyLongDrinkPreset(preset) {
+    setProductState((current) => ({
+      ...current,
+      stockMode: STOCK_EDITOR_MODES.recipe,
+      stockRecipe: {
+        enabled: true,
+        components: [
+          buildPresetComponent(preset.spirit, 40),
+          buildPresetComponent(preset.mixer, 250),
+        ],
+        choiceGroups: [],
+      },
+    }))
+  }
+
+  function enrichRecipeComponent(component) {
+    const stockItem = stockItems.find((item) => item.id === component.stockItemId)
+    return {
+      ...component,
+      stockItemName: stockItem?.name || component.stockItemName || '',
+    }
+  }
+
+  function updateRecipeComponent(componentId, patch) {
+    updateRecipe((recipe) => ({
+      ...recipe,
+      components: (recipe.components || []).map((component) =>
+        component.id === componentId ? enrichRecipeComponent({ ...component, ...patch }) : component,
+      ),
+    }))
+  }
+
+  function updateRecipeOptionComponent(groupId, optionId, componentId, patch) {
+    updateRecipe((recipe) => ({
+      ...recipe,
+      choiceGroups: (recipe.choiceGroups || []).map((group) =>
+        group.id === groupId
+          ? {
+              ...group,
+              options: (group.options || []).map((option) =>
+                option.id === optionId
+                  ? {
+                      ...option,
+                      components: (option.components || []).map((component) =>
+                        component.id === componentId ? enrichRecipeComponent({ ...component, ...patch }) : component,
+                      ),
+                    }
+                  : option,
+              ),
+            }
+          : group,
+      ),
+    }))
   }
 
   function updateIngredientField(id, value) {
@@ -877,6 +1639,16 @@ export function ProductManagementPanel({ eventId, actorUid }) {
           <span>Módosítósablonok</span>
           <strong>{modifierTemplates.length}</strong>
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeCatalogSection === 'stock'}
+          className={`catalog-mode-tab${activeCatalogSection === 'stock' ? ' active' : ''}`}
+          onClick={() => setActiveCatalogSection('stock')}
+        >
+          <span>Készlet</span>
+          <strong>{stockItems.length}</strong>
+        </button>
       </div>
 
       <div className="catalog-mode-panel">
@@ -914,7 +1686,7 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                 <label
                   className="secondary-button catalog-import-btn"
                   htmlFor="productImportFile"
-                  title={`Oszlopok: name, drs, price, category, barcodes (${PRODUCT_CATEGORIES.join(', ')})`}
+                  title={`Oszlopok: name, drs, price, category, barcodes (${PRODUCT_CATEGORIES.join(', ')}). Opcionális készlet: stock_mode, stock_quantity, stock_low_threshold, stock_unit, stock_recipe, stock_choice_groups.`}
                 >
                   ↑ Excel import
                 </label>
@@ -927,6 +1699,15 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                   disabled={pending}
                   style={{ display: 'none' }}
                 />
+                <button
+                  type="button"
+                  className="secondary-button catalog-import-btn"
+                  onClick={handleProductExport}
+                  disabled={pending || !products.length}
+                  title="Termékek exportálása Excelbe készlet oszlopokkal"
+                >
+                  ↓ Export
+                </button>
                 <button
                   type="button"
                   className="danger-button catalog-import-btn"
@@ -1171,6 +1952,244 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       ✕ Inaktív
                     </button>
                   </div>
+                </div>
+                <div className="field catalog-stock-recipe-field">
+                  <label>Készlet követés</label>
+                  <div className="stock-mode-grid">
+                    {[
+                      { mode: STOCK_EDITOR_MODES.none, title: 'Nincs', text: 'Nem fogyaszt készletet.' },
+                      { mode: STOCK_EDITOR_MODES.self, title: 'Saját készlet', text: 'Dobozos ital, nasi, darabos termék.' },
+                      { mode: STOCK_EDITOR_MODES.recipe, title: 'Receptből fogy', text: 'Fix alkohol + mixer vagy alapanyagok.' },
+                      { mode: STOCK_EDITOR_MODES.choice, title: 'Választással fogy', text: 'Például fehér/rosé fröccs.' },
+                    ].map((option) => (
+                      <button
+                        key={option.mode}
+                        type="button"
+                        className={`stock-mode-card${productState.stockMode === option.mode ? ' selected' : ''}`}
+                        onClick={() => updateStockMode(option.mode)}
+                      >
+                        <strong>{option.title}</strong>
+                        <span>{option.text}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {productState.stockMode === STOCK_EDITOR_MODES.self ? (
+                    <div className="catalog-recipe-box stock-self-box">
+                      <div className="split-header">
+                        <strong>{productState.name || 'Termék'} készlete</strong>
+                        <span className="catalog-state-badge">1 eladás = -1</span>
+                      </div>
+                      <div className="stock-self-grid">
+                        <div className="field">
+                          <label htmlFor="selfStockQuantity">Jelenlegi mennyiség</label>
+                          <input
+                            id="selfStockQuantity"
+                            value={productState.selfStockQuantity}
+                            onChange={(event) => setProductState((current) => ({ ...current, selfStockQuantity: event.target.value }))}
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <div className="field">
+                          <label htmlFor="selfStockLowThreshold">Alacsony jelzés</label>
+                          <input
+                            id="selfStockLowThreshold"
+                            value={productState.selfStockLowThreshold}
+                            onChange={(event) => setProductState((current) => ({ ...current, selfStockLowThreshold: event.target.value }))}
+                            inputMode="numeric"
+                          />
+                        </div>
+                        <div className="field">
+                          <label htmlFor="selfStockUnit">Egység</label>
+                          <select
+                            id="selfStockUnit"
+                            value={productState.selfStockUnit}
+                            onChange={(event) => setProductState((current) => ({ ...current, selfStockUnit: event.target.value }))}
+                          >
+                            <option value={STOCK_UNITS.piece}>db</option>
+                            <option value={STOCK_UNITS.ml}>ml</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {productState.stockMode === STOCK_EDITOR_MODES.recipe || productState.stockMode === STOCK_EDITOR_MODES.choice ? (
+                    <div className="catalog-recipe-box">
+                      <div className="split-header">
+                        <strong>Gyors hosszúital sablon</strong>
+                      </div>
+                      <div className="stock-preset-grid">
+                        {LONG_DRINK_RECIPE_PRESETS.map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            className="secondary-button compact-button"
+                            onClick={() => applyLongDrinkPreset(preset)}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="split-header">
+                        <strong>Fix fogyás / db</strong>
+                        <button
+                          type="button"
+                          className="secondary-button compact-button"
+                          onClick={() => updateRecipe((recipe) => ({
+                            ...recipe,
+                            components: [...(recipe.components || []), createRecipeComponent()],
+                          }))}
+                        >
+                          + Komponens
+                        </button>
+                      </div>
+                      {(productState.stockRecipe.components || []).map((component) => (
+                        <div key={component.id} className="catalog-recipe-row">
+                          <select
+                            value={component.stockItemId}
+                            onChange={(event) => updateRecipeComponent(component.id, { stockItemId: event.target.value })}
+                          >
+                            <option value="">Készletelem</option>
+                            {stockItems.map((stockItem) => (
+                              <option key={stockItem.id} value={stockItem.id}>
+                                {stockItem.name} ({STOCK_UNIT_LABELS[stockItem.unit] || stockItem.unit})
+                              </option>
+                            ))}
+                          </select>
+                          <input
+                            value={component.quantityPerUnit}
+                            onChange={(event) => updateRecipeComponent(component.id, { quantityPerUnit: event.target.value })}
+                            placeholder="mennyiség"
+                            inputMode="numeric"
+                          />
+                          <button
+                            type="button"
+                            className="danger-button compact-button"
+                            onClick={() => updateRecipe((recipe) => ({
+                              ...recipe,
+                              components: (recipe.components || []).filter((item) => item.id !== component.id),
+                            }))}
+                          >
+                            Törlés
+                          </button>
+                        </div>
+                      ))}
+
+                      {productState.stockMode === STOCK_EDITOR_MODES.choice ? (
+                        <>
+                          <div className="split-header">
+                            <strong>Kötelező választások</strong>
+                            <button
+                              type="button"
+                              className="secondary-button compact-button"
+                              onClick={() => updateRecipe((recipe) => ({
+                                ...recipe,
+                                choiceGroups: [...(recipe.choiceGroups || []), createRecipeChoiceGroup()],
+                              }))}
+                            >
+                              + Választás
+                            </button>
+                          </div>
+                          {(productState.stockRecipe.choiceGroups || []).map((group) => (
+                            <div key={group.id} className="catalog-choice-group">
+                              <div className="catalog-recipe-row">
+                                <input
+                                  value={group.label}
+                                  onChange={(event) => updateRecipe((recipe) => ({
+                                    ...recipe,
+                                    choiceGroups: (recipe.choiceGroups || []).map((item) =>
+                                      item.id === group.id ? { ...item, label: event.target.value } : item,
+                                    ),
+                                  }))}
+                                  placeholder="Pl. Bor fajtája"
+                                />
+                                <button
+                                  type="button"
+                                  className="danger-button compact-button"
+                                  onClick={() => updateRecipe((recipe) => ({
+                                    ...recipe,
+                                    choiceGroups: (recipe.choiceGroups || []).filter((item) => item.id !== group.id),
+                                  }))}
+                                >
+                                  Törlés
+                                </button>
+                              </div>
+                              {(group.options || []).map((option) => {
+                                const component = option.components?.[0] || createRecipeComponent()
+                                return (
+                                  <div key={option.id} className="catalog-recipe-row catalog-option-row">
+                                    <input
+                                      value={option.label}
+                                      onChange={(event) => updateRecipe((recipe) => ({
+                                        ...recipe,
+                                        choiceGroups: (recipe.choiceGroups || []).map((item) =>
+                                          item.id === group.id
+                                            ? {
+                                                ...item,
+                                                options: (item.options || []).map((candidate) =>
+                                                  candidate.id === option.id ? { ...candidate, label: event.target.value } : candidate,
+                                                ),
+                                              }
+                                            : item,
+                                        ),
+                                      }))}
+                                      placeholder="Opció neve"
+                                    />
+                                    <select
+                                      value={component.stockItemId}
+                                      onChange={(event) => updateRecipeOptionComponent(group.id, option.id, component.id, { stockItemId: event.target.value })}
+                                    >
+                                      <option value="">Készletelem</option>
+                                      {stockItems.map((stockItem) => (
+                                        <option key={stockItem.id} value={stockItem.id}>
+                                          {stockItem.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input
+                                      value={component.quantityPerUnit}
+                                      onChange={(event) => updateRecipeOptionComponent(group.id, option.id, component.id, { quantityPerUnit: event.target.value })}
+                                      placeholder="menny."
+                                      inputMode="numeric"
+                                    />
+                                    <button
+                                      type="button"
+                                      className="danger-button compact-button"
+                                      onClick={() => updateRecipe((recipe) => ({
+                                        ...recipe,
+                                        choiceGroups: (recipe.choiceGroups || []).map((item) =>
+                                          item.id === group.id
+                                            ? { ...item, options: (item.options || []).filter((candidate) => candidate.id !== option.id) }
+                                            : item,
+                                        ),
+                                      }))}
+                                    >
+                                      Törlés
+                                    </button>
+                                  </div>
+                                )
+                              })}
+                              <button
+                                type="button"
+                                className="secondary-button compact-button"
+                                onClick={() => updateRecipe((recipe) => ({
+                                  ...recipe,
+                                  choiceGroups: (recipe.choiceGroups || []).map((item) =>
+                                    item.id === group.id ? { ...item, options: [...(item.options || []), createRecipeOption()] } : item,
+                                  ),
+                                }))}
+                              >
+                                + Opció
+                              </button>
+                            </div>
+                          ))}
+                        </>
+                      ) : null}
+                      {!stockItems.length ? <span className="helper-text">Először hozz létre készletelemeket a Készlet fülön.</span> : null}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="button-row">
                   <button type="submit" className="primary-button" disabled={pending}>
@@ -1440,6 +2459,238 @@ export function ProductManagementPanel({ eventId, actorUid }) {
                       )}
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+        ) : null}
+        {activeCatalogSection === 'stock' ? (
+        <section className="panel catalog-panel">
+          <div className="catalog-panel-header">
+            <h4 className="card-title">Készlet</h4>
+            <div className="catalog-import-bar">
+              <label
+                className="secondary-button catalog-import-btn"
+                htmlFor="stockImportFile"
+                title="Oszlopok: name, unit, current_quantity, low_threshold, active"
+              >
+                ↑ Excel import
+              </label>
+              <input
+                id="stockImportFile"
+                ref={stockImportInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleStockExcelImport}
+                disabled={pending}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                className="secondary-button catalog-import-btn"
+                onClick={handleStockExcelExport}
+                disabled={pending || !stockItems.length}
+                title="Készletelemek exportálása Excelbe"
+              >
+                ↓ Export
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setStockItemState(emptyStockItemState)}
+                disabled={pending}
+              >
+                Új készletelem
+              </button>
+              {stockImportFileName ? <span className="catalog-import-filename">{stockImportFileName}</span> : null}
+            </div>
+          </div>
+
+          <div className="catalog-workbench">
+            <div className="catalog-list-card">
+              <div className="split-header">
+                <h5 className="catalog-editor-title">Készletelemek</h5>
+                <span className="catalog-state-badge">{stockItems.length}</span>
+              </div>
+              <div className="record-list stacked catalog-record-list">
+                {stockItems.length ? stockItems.map((stockItem) => (
+                  <button
+                    key={stockItem.id}
+                    type="button"
+                    className={`record-row catalog-product-row${stockItemState.stockItemId === stockItem.id ? ' selected' : ''}`}
+                    onClick={() => loadStockItemIntoForm(stockItem)}
+                  >
+                    <span className="catalog-row-body">
+                      <strong>{stockItem.name}</strong>
+                      <span className="catalog-row-chips">
+                        <span className="catalog-price-chip">
+                          {stockItem.currentQuantity ?? 0} {STOCK_UNIT_LABELS[stockItem.unit] || stockItem.unit}
+                        </span>
+                        <span className="catalog-ing-pill">Minimum: {stockItem.lowThreshold ?? 0}</span>
+                        {stockItem.isActive === false ? <span className="catalog-drs-chip">Inaktív</span> : null}
+                      </span>
+                    </span>
+                  </button>
+                )) : (
+                  <div className="catalog-empty-state">
+                    <strong>Még nincs készlet.</strong>
+                    <p className="helper-text">Hozz létre például sör db, fehér bor ml, vodka ml vagy tonic ml elemet.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="catalog-editor-stack">
+              <div className="catalog-editor-card">
+                <div className="split-header">
+                  <h5 className="catalog-editor-title">
+                    {stockItemState.stockItemId ? `${stockItemState.name || 'készletelem'} szerkesztése` : 'Új készletelem'}
+                  </h5>
+                  <span className={`catalog-state-badge ${stockItemState.stockItemId ? 'is-editing' : ''}`}>
+                    {stockItemState.stockItemId ? 'Szerkesztés' : 'Új'}
+                  </span>
+                </div>
+                <form className="form-grid" onSubmit={handleStockItemSubmit}>
+                  <div className="field">
+                    <label htmlFor="stockItemName">Név</label>
+                    <input
+                      id="stockItemName"
+                      value={stockItemState.name}
+                      onChange={(event) => setStockItemState((current) => ({ ...current, name: event.target.value }))}
+                      placeholder="Fehér bor"
+                      required
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="stockItemUnit">Egység</label>
+                    <select
+                      id="stockItemUnit"
+                      value={stockItemState.unit}
+                      onChange={(event) => setStockItemState((current) => ({ ...current, unit: event.target.value }))}
+                    >
+                      <option value={STOCK_UNITS.piece}>db</option>
+                      <option value={STOCK_UNITS.ml}>ml</option>
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="stockCurrentQuantity">Jelenlegi mennyiség</label>
+                    <input
+                      id="stockCurrentQuantity"
+                      value={stockItemState.currentQuantity}
+                      onChange={(event) => setStockItemState((current) => ({ ...current, currentQuantity: event.target.value }))}
+                      inputMode="numeric"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="stockLowThreshold">Alacsony jelzés</label>
+                    <input
+                      id="stockLowThreshold"
+                      value={stockItemState.lowThreshold}
+                      onChange={(event) => setStockItemState((current) => ({ ...current, lowThreshold: event.target.value }))}
+                      inputMode="numeric"
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={stockItemState.isActive}
+                        onChange={(event) => setStockItemState((current) => ({ ...current, isActive: event.target.checked }))}
+                      />
+                      <span>Aktív</span>
+                    </label>
+                  </div>
+                  <div className="button-row">
+                    <button type="submit" className="primary-button" disabled={pending}>
+                      {stockItemState.stockItemId ? 'Frissítés' : 'Mentés'}
+                    </button>
+                    {stockItemState.stockItemId ? (
+                      <button type="button" className="secondary-button" onClick={() => setStockItemState(emptyStockItemState)}>
+                          Mégse
+                      </button>
+                    ) : null}
+                  </div>
+                </form>
+              </div>
+
+              <div className="catalog-editor-card">
+                <div className="split-header">
+                  <h5 className="catalog-editor-title">Készletmozgás</h5>
+                  <span className="catalog-state-badge">{stockMovements.length}</span>
+                </div>
+                <form className="form-grid" onSubmit={handleManualStockAdd}>
+                  <div className="field">
+                    <label htmlFor="movementStockItem">Készletelem</label>
+                    <select
+                      id="movementStockItem"
+                      value={stockMovementState.stockItemId}
+                      onChange={(event) => setStockMovementState((current) => ({ ...current, stockItemId: event.target.value }))}
+                      required
+                    >
+                      <option value="">Válassz</option>
+                      {stockItems.map((stockItem) => (
+                        <option key={stockItem.id} value={stockItem.id}>{stockItem.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="movementAmount">Hozzáadás</label>
+                    <input
+                      id="movementAmount"
+                      value={stockMovementState.amount}
+                      onChange={(event) => setStockMovementState((current) => ({ ...current, amount: event.target.value }))}
+                      inputMode="numeric"
+                      placeholder="pl. 24000"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="movementCounted">Számolt készlet</label>
+                    <input
+                      id="movementCounted"
+                      value={stockMovementState.countedQuantity}
+                      onChange={(event) => setStockMovementState((current) => ({ ...current, countedQuantity: event.target.value }))}
+                      inputMode="numeric"
+                      placeholder="korrekcióhoz"
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="movementReason">Megjegyzés</label>
+                    <input
+                      id="movementReason"
+                      value={stockMovementState.reason}
+                      onChange={(event) => setStockMovementState((current) => ({ ...current, reason: event.target.value }))}
+                    />
+                  </div>
+                  <div className="button-row">
+                    <button type="submit" className="primary-button" disabled={pending || !stockMovementState.stockItemId || parseStockInteger(stockMovementState.amount, 0) <= 0}>
+                      Hozzáadás
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleManualStockCorrection}
+                      disabled={pending || !stockMovementState.stockItemId || stockMovementState.countedQuantity === ''}
+                    >
+                      Korrekció
+                    </button>
+                  </div>
+                </form>
+                <div className="record-list stacked catalog-record-list">
+                  {stockMovements.slice(0, 20).map((movement) => (
+                    <div key={movement.id} className="record-row catalog-product-row">
+                      <span className="catalog-row-body">
+                        <strong>{movement.stockItemName}</strong>
+                        <span className="catalog-row-chips">
+                          <span className="catalog-price-chip">
+                            {movement.quantityDelta > 0 ? '+' : ''}{movement.quantityDelta} {STOCK_UNIT_LABELS[movement.unit] || movement.unit}
+                          </span>
+                          <span className="catalog-ing-pill">{movement.type}</span>
+                          {movement.reason ? <span className="catalog-ing-pill">{movement.reason}</span> : null}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

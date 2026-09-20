@@ -15,8 +15,10 @@ import { EVENT_SUBCOLLECTIONS, getEventCollectionPath, getEventScopedPath } from
 import { createAuditLogWrite } from '../audit/auditService'
 import { AUDIT_TYPES } from '../audit/auditModels'
 import { parseHufInteger } from '../../lib/money'
+import { normalizeSearchText } from '../../lib/normalize'
 import { buildProductPatch, buildProductRecord } from './productModels'
 import { sanitizeProductBarcodes } from './productBarcodes'
+import { buildStockItemRecord, parseStockInteger, STOCK_UNITS } from '../stock/stockModels'
 
 const MAX_IMPORT_BATCH_SIZE = 200
 
@@ -34,6 +36,86 @@ function buildBarcodeIndexRecord({ barcode, productId, productName, actorUid }) 
   }
 }
 
+function normalizeImportedStockName(name) {
+  return normalizeSearchText(name)
+}
+
+function createRecipeComponentFromStockItem(stockItemRef, component) {
+  return {
+    id: crypto.randomUUID(),
+    stockItemId: stockItemRef.id,
+    stockItemName: component.stockItemName,
+    quantityPerUnit: parseStockInteger(component.quantityPerUnit, 0),
+  }
+}
+
+function createRecipeFromImport(product, ensureStockItem) {
+  const stockImport = product.stockImport
+
+  if (!stockImport || stockImport.mode === 'none') {
+    return product.stockRecipe
+  }
+
+  if (stockImport.mode === 'self') {
+    const stockItemRef = ensureStockItem({
+      name: product.name,
+      unit: stockImport.unit || STOCK_UNITS.piece,
+      currentQuantity: stockImport.quantity,
+      lowThreshold: stockImport.lowThreshold,
+      applyQuantity: true,
+    })
+
+    return {
+      enabled: true,
+      components: [
+        {
+          id: crypto.randomUUID(),
+          stockItemId: stockItemRef.id,
+          stockItemName: product.name,
+          quantityPerUnit: 1,
+        },
+      ],
+      choiceGroups: [],
+    }
+  }
+
+  const components = (stockImport.components || []).map((component) => {
+    const stockItemRef = ensureStockItem({
+      name: component.stockItemName,
+      unit: component.unit || STOCK_UNITS.ml,
+      currentQuantity: 0,
+      lowThreshold: 0,
+      applyQuantity: false,
+    })
+    return createRecipeComponentFromStockItem(stockItemRef, component)
+  })
+
+  const choiceGroups = (stockImport.choiceGroups || []).map((group) => ({
+    id: crypto.randomUUID(),
+    label: group.label,
+    options: (group.options || []).map((option) => ({
+      id: crypto.randomUUID(),
+      label: option.label,
+      components: (option.components || []).map((component) => {
+        const stockItemRef = ensureStockItem({
+          name: component.stockItemName,
+          unit: component.unit || STOCK_UNITS.ml,
+          currentQuantity: 0,
+          lowThreshold: 0,
+          applyQuantity: false,
+        })
+        return createRecipeComponentFromStockItem(stockItemRef, component)
+      }),
+    })),
+  }))
+
+  return {
+    enabled: components.length > 0 || choiceGroups.length > 0,
+    components,
+    choiceGroups,
+  }
+}
+
 async function assertBarcodesAvailable({ eventId, barcodes, productId = null }) {
   const barcodeSnapshots = await Promise.all(
     barcodes.map((barcode) => getDoc(getProductBarcodeRef(eventId, barcode))),
@@ -46,6 +128,105 @@ async function assertBarcodesAvailable({ eventId, barcodes, productId = null }) 
       throw new Error(`A(z) ${barcodes[index]} vonalkod mar masik termekhez tartozik.`)
     }
   })
+}
+
+async function prepareImportedStockRecipe({
+  eventId,
+  actorUid,
+  product,
+}) {
+  if (!product.stockImport || product.stockImport.mode === 'none') {
+    return product.stockRecipe
+  }
+
+  const stockItemSnapshot = await getDocs(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.stockItems)))
+  const stockItemRefsByName = new Map()
+  const stockItemWrites = new Map()
+
+  stockItemSnapshot.docs.forEach((item) => {
+    const stockItem = item.data()
+    const normalizedName = normalizeImportedStockName(stockItem.name)
+    if (normalizedName) {
+      stockItemRefsByName.set(normalizedName, {
+        ref: item.ref,
+        data: stockItem,
+      })
+    }
+  })
+
+  function ensureStockItem({
+    name,
+    unit = STOCK_UNITS.piece,
+    currentQuantity = 0,
+    lowThreshold = 0,
+    applyQuantity = false,
+  }) {
+    const trimmedName = String(name || '').trim()
+    const normalizedName = normalizeImportedStockName(trimmedName)
+    const existing = stockItemRefsByName.get(normalizedName)
+
+    if (existing) {
+      if (applyQuantity) {
+        stockItemWrites.set(existing.ref.path, {
+          ref: existing.ref,
+          data: {
+            name: existing.data.name || trimmedName,
+            normalizedName,
+            unit: unit || existing.data.unit || STOCK_UNITS.piece,
+            currentQuantity: parseStockInteger(currentQuantity, 0),
+            lowThreshold: Math.max(0, parseStockInteger(lowThreshold, 0)),
+            isActive: existing.data.isActive !== false,
+            updatedAt: serverTimestamp(),
+            updatedBy: actorUid,
+          },
+          merge: true,
+        })
+      }
+      return existing.ref
+    }
+
+    const ref = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.stockItems)))
+    stockItemRefsByName.set(normalizedName, {
+      ref,
+      data: {
+        name: trimmedName,
+        unit,
+      },
+    })
+    stockItemWrites.set(ref.path, {
+      ref,
+      data: buildStockItemRecord({
+        name: trimmedName,
+        unit,
+        currentQuantity: applyQuantity ? currentQuantity : 0,
+        lowThreshold: applyQuantity ? lowThreshold : 0,
+        isActive: true,
+        actorUid,
+      }),
+      merge: false,
+    })
+    return ref
+  }
+
+  const stockRecipe = createRecipeFromImport(product, ensureStockItem)
+  const stockWrites = Array.from(stockItemWrites.values())
+
+  for (let startIndex = 0; startIndex < stockWrites.length; startIndex += MAX_IMPORT_BATCH_SIZE) {
+    const batch = writeBatch(db)
+    const chunk = stockWrites.slice(startIndex, startIndex + MAX_IMPORT_BATCH_SIZE)
+
+    chunk.forEach((write) => {
+      if (write.merge) {
+        batch.set(write.ref, write.data, { merge: true })
+      } else {
+        batch.set(write.ref, write.data)
+      }
+    })
+
+    await batch.commit()
+  }
+
+  return stockRecipe
 }
 
 export function subscribeToProducts(eventId, onNext, onError) {
@@ -75,6 +256,8 @@ export async function saveProduct({
   modifierTemplateId,
   isDRS = false,
   barcodes = [],
+  stockRecipe,
+  stockImport,
 }) {
   const parsedPrice = parseHufInteger(price)
   const normalizedBarcodes = sanitizeProductBarcodes(barcodes)
@@ -82,6 +265,16 @@ export async function saveProduct({
   if (!Number.isInteger(parsedPrice) || parsedPrice < 0) {
     throw new Error('Price must be a non-negative integer HUF value.')
   }
+
+  const preparedStockRecipe = await prepareImportedStockRecipe({
+    eventId,
+    actorUid,
+    product: {
+      name,
+      stockRecipe,
+      stockImport,
+    },
+  })
 
   const targetRef = productId
     ? doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.products, productId))
@@ -96,6 +289,7 @@ export async function saveProduct({
     modifierTemplateId,
     isDRS,
     barcodes: normalizedBarcodes,
+    stockRecipe: preparedStockRecipe,
     actorUid,
   }
 
@@ -114,6 +308,7 @@ export async function saveProduct({
       modifierTemplateId: modifierTemplateId || null,
       isDRS,
       barcodes: normalizedBarcodes,
+      stockRecipe: preparedStockRecipe,
     },
   })
 
@@ -192,9 +387,100 @@ export async function importProducts({
     barcodes: [...importedBarcodeOwners.keys()],
   })
 
-  for (let startIndex = 0; startIndex < products.length; startIndex += MAX_IMPORT_BATCH_SIZE) {
+  const stockItemSnapshot = await getDocs(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.stockItems)))
+  const stockItemRefsByName = new Map()
+  const stockItemWrites = new Map()
+
+  stockItemSnapshot.docs.forEach((item) => {
+    const stockItem = item.data()
+    const normalizedName = normalizeImportedStockName(stockItem.name)
+    if (normalizedName) {
+      stockItemRefsByName.set(normalizedName, {
+        ref: item.ref,
+        data: stockItem,
+      })
+    }
+  })
+
+  function ensureStockItem({
+    name,
+    unit = STOCK_UNITS.piece,
+    currentQuantity = 0,
+    lowThreshold = 0,
+    applyQuantity = false,
+  }) {
+    const trimmedName = String(name || '').trim()
+    const normalizedName = normalizeImportedStockName(trimmedName)
+    const existing = stockItemRefsByName.get(normalizedName)
+
+    if (existing) {
+      if (applyQuantity) {
+        stockItemWrites.set(existing.ref.path, {
+          ref: existing.ref,
+          data: {
+            name: existing.data.name || trimmedName,
+            normalizedName,
+            unit: unit || existing.data.unit || STOCK_UNITS.piece,
+            currentQuantity: parseStockInteger(currentQuantity, 0),
+            lowThreshold: Math.max(0, parseStockInteger(lowThreshold, 0)),
+            isActive: existing.data.isActive !== false,
+            updatedAt: serverTimestamp(),
+            updatedBy: actorUid,
+          },
+          merge: true,
+        })
+      }
+      return existing.ref
+    }
+
+    const ref = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.stockItems)))
+    stockItemRefsByName.set(normalizedName, {
+      ref,
+      data: {
+        name: trimmedName,
+        unit,
+      },
+    })
+    stockItemWrites.set(ref.path, {
+      ref,
+      data: buildStockItemRecord({
+        name: trimmedName,
+        unit,
+        currentQuantity: applyQuantity ? currentQuantity : 0,
+        lowThreshold: applyQuantity ? lowThreshold : 0,
+        isActive: true,
+        actorUid,
+      }),
+      merge: false,
+    })
+    return ref
+  }
+
+  const preparedProducts = products.map((product) => ({
+    ...product,
+    stockRecipe: createRecipeFromImport(product, ensureStockItem),
+  }))
+
+  const stockWrites = Array.from(stockItemWrites.values())
+
+  for (let startIndex = 0; startIndex < stockWrites.length; startIndex += MAX_IMPORT_BATCH_SIZE) {
     const batch = writeBatch(db)
-    const chunk = products.slice(startIndex, startIndex + MAX_IMPORT_BATCH_SIZE)
+    const chunk = stockWrites.slice(startIndex, startIndex + MAX_IMPORT_BATCH_SIZE)
+
+    chunk.forEach((write) => {
+      if (write.merge) {
+        batch.set(write.ref, write.data, { merge: true })
+      } else {
+        batch.set(write.ref, write.data)
+      }
+    })
+
+    await batch.commit()
+  }
+
+  for (let startIndex = 0; startIndex < preparedProducts.length; startIndex += MAX_IMPORT_BATCH_SIZE) {
+    const batch = writeBatch(db)
+    const chunk = preparedProducts.slice(startIndex, startIndex + MAX_IMPORT_BATCH_SIZE)
 
     chunk.forEach((product) => {
       const targetRef = doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.products)))
@@ -207,6 +493,7 @@ export async function importProducts({
         modifierTemplateId: '',
         isDRS: product.isDRS,
         barcodes: product.barcodes || [],
+        stockRecipe: product.stockRecipe,
         actorUid,
       }))
       ;(product.barcodes || []).forEach((barcode) => {
@@ -232,6 +519,7 @@ export async function importProducts({
     targetId: null,
     details: {
       importedCount: products.length,
+      importedStockItemCount: stockWrites.length,
       categories: [...new Set(products.map((product) => product.category))].sort(),
     },
   })

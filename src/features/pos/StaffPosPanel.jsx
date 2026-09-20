@@ -34,6 +34,8 @@ import {
 } from './basketModels'
 import { subscribeOrdersForPerson } from '../orders/orderService'
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
+import { subscribeToStockItems } from '../stock/stockService'
+import { buildStockSelectionsFromChoiceGroups, STOCK_UNIT_LABELS } from '../stock/stockModels'
 import { useKitchenWorkload } from '../kitchen/useKitchenWorkload'
 import {
   BURGER_TRIGGER_PATTERN,
@@ -66,6 +68,7 @@ const REUSABLE_CUP_RETURN_PRODUCT = Object.freeze({
 // PRODUCT_CATEGORIES already includes MISC_CATEGORY ('Egyéb'); dedupe defensively
 // so this list remains correct even if either constant is reordered later.
 const allCategories = ['all', ...PRODUCT_CATEGORIES.filter((c) => c !== MISC_CATEGORY), MISC_CATEGORY]
+const ENABLE_LONG_DRINK_GUIDE = false
 const BASKET_ABANDON_CANCEL_MS = 60 * 1000
 const BASKET_HEARTBEAT_MS = 15 * 1000
 const BASKET_SYNC_DEBOUNCE_MS = 220
@@ -746,7 +749,60 @@ function buildPersonSearchText(person) {
     .toLowerCase()
 }
 
-const ProductTile = memo(({ product, onClick, onLongPress, disabled, clickDisabled }) => {
+function getComponentStockState(component, stockItemsById) {
+  const stockItem = stockItemsById[component.stockItemId]
+  const quantity = Number(stockItem?.currentQuantity ?? 0)
+  const threshold = Number(stockItem?.lowThreshold ?? 0)
+  const needed = Number(component.quantityPerUnit || 0)
+
+  if (!stockItem || stockItem.isActive === false || quantity - needed <= 0) {
+    return 'out'
+  }
+
+  if (quantity <= threshold) {
+    return 'low'
+  }
+
+  return 'ok'
+}
+
+function getProductStockStatus(product, stockItemsById) {
+  const recipe = product.stockRecipe
+
+  if (!recipe?.enabled) {
+    return null
+  }
+
+  const fixedStates = (recipe.components || []).map((component) => getComponentStockState(component, stockItemsById))
+  if (fixedStates.includes('out')) {
+    return 'out'
+  }
+
+  const groupStates = (recipe.choiceGroups || []).map((group) => {
+    const optionStates = (group.options || []).map((option) => {
+      const states = (option.components || []).map((component) => getComponentStockState(component, stockItemsById))
+      return states.includes('out') ? 'out' : states.includes('low') ? 'low' : 'ok'
+    })
+
+    if (!optionStates.length || optionStates.every((state) => state === 'out')) {
+      return 'out'
+    }
+
+    return optionStates.some((state) => state === 'low') ? 'low' : 'ok'
+  })
+
+  if (groupStates.includes('out')) {
+    return 'out'
+  }
+
+  if (fixedStates.includes('low') || groupStates.includes('low')) {
+    return 'low'
+  }
+
+  return null
+}
+
+const ProductTile = memo(({ product, onClick, onLongPress, disabled, clickDisabled, stockStatus }) => {
   const longPressTimerRef = useRef(null)
   const longPressTriggeredRef = useRef(false)
   const supportsAvailabilityToggle = !product.isCreditReturn && !product.isDrsReturn && !product.isReusableCupReturn
@@ -804,6 +860,11 @@ const ProductTile = memo(({ product, onClick, onLongPress, disabled, clickDisabl
       {product.isTemporarilyUnavailable ? (
         <span className="product-tile-status">TNA</span>
       ) : null}
+      {stockStatus ? (
+        <span className={`product-stock-badge product-stock-badge--${stockStatus}`}>
+          {stockStatus === 'out' ? 'Elfogyott' : 'Alacsony'}
+        </span>
+      ) : null}
       <span style={{ fontWeight: 800, color: 'var(--primary)', fontSize: '0.95rem', marginTop: 'auto' }}>
         {formatHuf(product.price)}
       </span>
@@ -819,6 +880,7 @@ export function StaffPosPanel({ eventId }) {
   const [people, setPeople] = useState([])
   const [products, setProducts] = useState([])
   const [modifierTemplates, setModifierTemplates] = useState([])
+  const [stockItems, setStockItems] = useState([])
   const [selectedPerson, setSelectedPerson] = useState(null)
   const [selectedPersonOrders, setSelectedPersonOrders] = useState([])
   const [switchTargetPerson, setSwitchTargetPerson] = useState(null)
@@ -827,6 +889,8 @@ export function StaffPosPanel({ eventId }) {
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [customizingProduct, setCustomizingProduct] = useState(null)
   const [customizationState, setCustomizationState] = useState(null)
+  const [pendingStockChoice, setPendingStockChoice] = useState(null)
+  const [stockChoiceState, setStockChoiceState] = useState({})
   const [funModeActive, setFunModeActive] = useState(false)
   const [burgerGameProduct, setBurgerGameProduct] = useState(null)
   const [gyrosGameProduct, setGyrosGameProduct] = useState(null)
@@ -885,6 +949,10 @@ export function StaffPosPanel({ eventId }) {
 
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const sessionId = useMemo(() => getStaffSessionId(), [])
+  const stockItemsById = useMemo(
+    () => Object.fromEntries(stockItems.map((item) => [item.id, item])),
+    [stockItems],
+  )
   const peopleSearchIndex = useMemo(() => (
     people.map((person) => ({
       person,
@@ -938,6 +1006,10 @@ export function StaffPosPanel({ eventId }) {
       () => {}, /* swallow — POS keeps working without history */
     )
   }, [eventId, selectedPerson?.id])
+
+  useEffect(() => {
+    return subscribeToStockItems(eventId, setStockItems, (error) => setErrorMessage(error.message))
+  }, [eventId])
 
   useEffect(() => {
     if (!spritzerGuideOpen && !longDrinkGuideOpen) return undefined
@@ -1734,6 +1806,24 @@ export function StaffPosPanel({ eventId }) {
     }
   }, [applyOptimisticBasketItems, repoharLimit, repoharOutstandingFinalized])
 
+  const queueProductAdd = useCallback((product, customization) => {
+    if (!selectedPersonRef.current) {
+      addItemToBasket(product, customization)
+      return
+    }
+
+    const recipe = product.stockRecipe
+    const choiceGroups = recipe?.enabled ? (recipe.choiceGroups || []) : []
+
+    if (choiceGroups.length) {
+      setPendingStockChoice({ product, customization })
+      setStockChoiceState({})
+      return
+    }
+
+    addItemToBasket(product, customization)
+  }, [addItemToBasket])
+
   const startCustomization = useCallback((product) => {
     if (productsPaymentBlocked && !product.isCreditReturn && (product.price || 0) > 0) {
       return
@@ -1758,12 +1848,12 @@ export function StaffPosPanel({ eventId }) {
     }
 
     if (!template) {
-      addItemToBasket(product, null)
+      queueProductAdd(product, null)
       return
     }
     setCustomizingProduct({ product, template })
     setCustomizationState(createCustomizationState(template))
-  }, [modifierTemplates, addItemToBasket, funModeActive, productsPaymentBlocked])
+  }, [modifierTemplates, queueProductAdd, funModeActive, productsPaymentBlocked])
 
   startCustomizationRef.current = startCustomization
 
@@ -1820,7 +1910,33 @@ export function StaffPosPanel({ eventId }) {
     const targetProduct = customizingProduct.product
     setCustomizingProduct(null)
     setCustomizationState(null)
-    addItemToBasket(targetProduct, customization)
+    queueProductAdd(targetProduct, customization)
+  }
+
+  function handleConfirmStockChoice() {
+    if (!pendingStockChoice) return
+
+    const choiceGroups = pendingStockChoice.product.stockRecipe?.choiceGroups || []
+    const allSelected = choiceGroups.every((group) => stockChoiceState[group.id])
+
+    if (!allSelected) {
+      setErrorMessage('Válaszd ki a kötelező készlet opciókat.')
+      return
+    }
+
+    const stockSelections = buildStockSelectionsFromChoiceGroups(choiceGroups, stockChoiceState)
+    const customization = {
+      ...(pendingStockChoice.customization || {
+        includedIngredients: [],
+        removedIngredients: [],
+        extras: [],
+      }),
+      stockSelections,
+    }
+
+    addItemToBasket(pendingStockChoice.product, customization)
+    setPendingStockChoice(null)
+    setStockChoiceState({})
   }
 
   function toggleCustomizationIngredient(ingredientId) {
@@ -2350,7 +2466,7 @@ export function StaffPosPanel({ eventId }) {
           >
             {groupedProducts.map((group) => (
               <section key={group.category} className="product-category-section">
-                {showProductCategoryHeadings || group.category === 'Bor' || group.category === 'Hosszúital' ? (
+                {showProductCategoryHeadings || group.category === 'Bor' || (ENABLE_LONG_DRINK_GUIDE && group.category === 'Hosszúital') ? (
                   <div className="product-category-title-row">
                     <h4 className="product-category-title">{group.category}</h4>
                     {group.category === 'Bor' ? (
@@ -2364,7 +2480,7 @@ export function StaffPosPanel({ eventId }) {
                         <HelpIcon />
                       </button>
                     ) : null}
-                    {group.category === 'Hosszúital' ? (
+                    {ENABLE_LONG_DRINK_GUIDE && group.category === 'Hosszúital' ? (
                       <button
                         type="button"
                         className="spritzer-help-button longdrink-help-button"
@@ -2391,6 +2507,7 @@ export function StaffPosPanel({ eventId }) {
                         productsDisabled
                         || (productsPaymentBlocked && !product.isCreditReturn && (product.price || 0) > 0)
                       }
+                      stockStatus={getProductStockStatus(product, stockItemsById)}
                     />
                   ))}
                 </div>
@@ -2475,7 +2592,7 @@ export function StaffPosPanel({ eventId }) {
           </>
         )}
 
-        {longDrinkGuideOpen && (
+        {ENABLE_LONG_DRINK_GUIDE && longDrinkGuideOpen && (
           <>
             <div className="modal-backdrop spritzer-guide-backdrop" onClick={() => setLongDrinkGuideOpen(false)} />
             <div className="spritzer-guide-modal longdrink-guide-modal floating-overlay" role="dialog" aria-modal="true" aria-labelledby="longDrinkGuideTitle">
@@ -2514,6 +2631,58 @@ export function StaffPosPanel({ eventId }) {
                     </article>
                   ))}
                 </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {pendingStockChoice && (
+          <>
+            <div className="modal-backdrop" onClick={() => setPendingStockChoice(null)} />
+            <div className="stock-choice-modal floating-overlay" role="dialog" aria-modal="true">
+              <div className="stock-choice-header">
+                <div>
+                  <span className="catalog-preview-label">Készlet választás</span>
+                  <h4>{pendingStockChoice.product.name}</h4>
+                </div>
+                <button type="button" className="secondary-button" onClick={() => setPendingStockChoice(null)}>
+                  Bezárás
+                </button>
+              </div>
+              <div className="stock-choice-body">
+                {(pendingStockChoice.product.stockRecipe?.choiceGroups || []).map((group) => (
+                  <section key={group.id} className="stock-choice-group">
+                    <h5>{group.label}</h5>
+                    <div className="stock-choice-options">
+                      {(group.options || []).map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          className={`stock-choice-option${stockChoiceState[group.id] === option.id ? ' selected' : ''}`}
+                          onClick={() => setStockChoiceState((current) => ({ ...current, [group.id]: option.id }))}
+                        >
+                          <strong>{option.label}</strong>
+                          <span>
+                            {(option.components || []).map((component) => {
+                              const stockItem = stockItemsById[component.stockItemId]
+                              return `${component.quantityPerUnit} ${STOCK_UNIT_LABELS[stockItem?.unit] || ''}`
+                            }).join(' + ')}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+              <div className="stock-choice-footer">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={handleConfirmStockChoice}
+                  disabled={(pendingStockChoice.product.stockRecipe?.choiceGroups || []).some((group) => !stockChoiceState[group.id])}
+                >
+                  Hozzáadás
+                </button>
               </div>
             </div>
           </>

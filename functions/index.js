@@ -48,11 +48,20 @@ const AUDIT_TYPES = {
   qrReset: 'qrReset',
   eventChange: 'eventChange',
   topup: 'topup',
+  manualBalanceAdjustment: 'manualBalanceAdjustment',
+  bulkBalanceAdjustment: 'bulkBalanceAdjustment',
 }
 
 const LEDGER_ENTRY_TYPES = {
   topup: 'topup',
+  manualAdjustment: 'manualAdjustment',
 }
+
+// Safety caps for bulk balance adjust — a Firestore transaction can do up to
+// 500 writes, we spend 3 per person (balance + ledger + audit), so 150 is a
+// comfortable per-chunk ceiling. MAX_BULK_TOTAL bounds the whole operation.
+const BULK_BALANCE_CHUNK_SIZE = 150
+const MAX_BULK_TOTAL = 5000
 
 const PERSON_RECORD_STATUSES = {
   deleted: 'deleted',
@@ -124,6 +133,18 @@ function parsePositiveHufAmount(rawValue) {
 
   if (!Number.isInteger(amount) || amount <= 0) {
     throw new HttpsError('invalid-argument', 'amount must be a positive integer HUF value.')
+  }
+
+  return amount
+}
+
+// Accepts positive OR negative integers, rejects zero. Used by bulk balance
+// adjust where negative deltas (debits) are valid.
+function parseNonZeroHufAmount(rawValue) {
+  const amount = Number.parseInt(`${rawValue ?? ''}`.trim(), 10)
+
+  if (!Number.isInteger(amount) || amount === 0) {
+    throw new HttpsError('invalid-argument', 'amount must be a non-zero integer HUF value.')
   }
 
   return amount
@@ -316,6 +337,7 @@ function buildLedgerEntryRecord({
   balanceBefore,
   balanceAfter,
   reason = '',
+  correlationId = null,
 }) {
   return {
     type,
@@ -326,6 +348,7 @@ function buildLedgerEntryRecord({
     balanceAfter,
     currency: 'HUF',
     reason,
+    correlationId,
     createdAt: FieldValue.serverTimestamp(),
   }
 }
@@ -660,6 +683,168 @@ export const topUpPersonBalance = onCall(callableOptions, async (request) => {
   })
 
   return { personId, amount }
+})
+
+/**
+ * Apply one balance delta to many personas in a single operation.
+ *
+ * Idempotent: if a summary audit log with the same correlationId already
+ * exists at the event level, the function returns the cached result instead
+ * of double-processing. This means a network retry / double-click won't
+ * apply the delta twice.
+ *
+ * Processing is chunked (150 people per Firestore transaction). Chunks are
+ * atomic individually; if one chunk fails halfway through, previous chunks
+ * are still committed. The caller receives {applied, skipped, failedChunks}
+ * so partial failures are visible.
+ *
+ * Deleted personas are silently skipped and reported in `skipped`.
+ */
+export const bulkAdjustPersonBalance = onCall(callableOptions, async (request) => {
+  const authContext = ensureAdmin(request)
+  const eventId = normalizeEventId(request.data?.eventId)
+  const rawIds = Array.isArray(request.data?.personIds) ? request.data.personIds : []
+  const amount = parseNonZeroHufAmount(request.data?.amount)
+  const reason = String(request.data?.reason || '').trim().slice(0, 500)
+  const correlationId = String(request.data?.correlationId || '').trim()
+
+  if (!correlationId) {
+    throw new HttpsError('invalid-argument', 'correlationId is required for bulk balance adjustments.')
+  }
+
+  // Dedup + normalise ids.
+  const personIds = [...new Set(rawIds.map((id) => String(id || '').trim()).filter(Boolean))]
+
+  if (personIds.length === 0) {
+    throw new HttpsError('invalid-argument', 'At least one personId is required.')
+  }
+  if (personIds.length > MAX_BULK_TOTAL) {
+    throw new HttpsError('failed-precondition', `Too many personas in one bulk operation (max ${MAX_BULK_TOTAL}).`)
+  }
+
+  // Idempotency check: has a summary audit with this correlationId already
+  // been written for this event? If so, return whatever it recorded.
+  const auditColRef = db.collection(`${getEventPath(eventId)}/auditLogs`)
+  const existing = await auditColRef
+    .where('type', '==', AUDIT_TYPES.bulkBalanceAdjustment)
+    .where('targetId', '==', correlationId)
+    .limit(1)
+    .get()
+  if (!existing.empty) {
+    const doc = existing.docs[0].data()
+    return {
+      applied: doc?.details?.appliedCount || 0,
+      skipped: doc?.details?.skipped || [],
+      failedChunks: 0,
+      correlationId,
+      alreadyProcessed: true,
+    }
+  }
+
+  const skipped = []
+  let applied = 0
+  let failedChunks = 0
+  const applyStartedAt = Date.now()
+
+  // Split into chunks and process one transaction per chunk.
+  for (let i = 0; i < personIds.length; i += BULK_BALANCE_CHUNK_SIZE) {
+    const chunkIds = personIds.slice(i, i + BULK_BALANCE_CHUNK_SIZE)
+    try {
+      await db.runTransaction(async (transaction) => {
+        const refs = chunkIds.map((id) => getPersonRef(eventId, id))
+        const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)))
+
+        for (let idx = 0; idx < chunkIds.length; idx += 1) {
+          const personId = chunkIds[idx]
+          const snap = snapshots[idx]
+
+          if (!snap.exists) {
+            skipped.push({ personId, reason: 'not-found' })
+            continue
+          }
+          const person = snap.data() || {}
+          if (person.recordStatus === PERSON_RECORD_STATUSES.deleted) {
+            skipped.push({ personId, reason: 'deleted' })
+            continue
+          }
+
+          const balanceBefore = Number.isFinite(person.balance) ? person.balance : 0
+          const balanceAfter = balanceBefore + amount
+
+          transaction.set(
+            refs[idx],
+            { balance: balanceAfter, updatedAt: FieldValue.serverTimestamp() },
+            { merge: true },
+          )
+          transaction.set(
+            db.collection(`${getEventPath(eventId)}/ledgerEntries`).doc(),
+            buildLedgerEntryRecord({
+              type: LEDGER_ENTRY_TYPES.manualAdjustment,
+              actorUid: authContext.uid,
+              personId,
+              amount,
+              balanceBefore,
+              balanceAfter,
+              reason,
+              correlationId,
+            }),
+          )
+          transaction.set(
+            createAuditLogRef(eventId),
+            buildAuditLogRecord({
+              type: AUDIT_TYPES.manualBalanceAdjustment,
+              actorUid: authContext.uid,
+              summary: `Bulk balance adjustment applied to person ${personId}`,
+              targetType: 'personBalance',
+              targetId: personId,
+              personId,
+              details: {
+                amount,
+                balanceBefore,
+                balanceAfter,
+                reason: reason || null,
+                correlationId,
+                bulk: true,
+              },
+            }),
+          )
+          applied += 1
+        }
+      })
+    } catch (error) {
+      failedChunks += 1
+      console.error('bulkAdjustPersonBalance chunk failed', {
+        chunkIndex: i / BULK_BALANCE_CHUNK_SIZE,
+        chunkSize: chunkIds.length,
+        error: error?.message,
+      })
+    }
+  }
+
+  // Summary audit at event level — records the whole run in one row for
+  // easy reporting + idempotency lookups.
+  await auditColRef.add(
+    buildAuditLogRecord({
+      type: AUDIT_TYPES.bulkBalanceAdjustment,
+      actorUid: authContext.uid,
+      summary: `Bulk balance adjustment: ${amount > 0 ? '+' : ''}${amount} HUF × ${applied} personas`,
+      targetType: 'bulkPersonBalance',
+      targetId: correlationId,
+      personId: null,
+      details: {
+        correlationId,
+        amount,
+        requestedCount: personIds.length,
+        appliedCount: applied,
+        skipped,
+        failedChunks,
+        reason: reason || null,
+        durationMs: Date.now() - applyStartedAt,
+      },
+    }),
+  )
+
+  return { applied, skipped, failedChunks, correlationId, alreadyProcessed: false }
 })
 
 export const generateQrCredentials = onCall(async (request) => {

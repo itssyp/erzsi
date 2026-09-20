@@ -12,6 +12,7 @@ export const AUDIT_TYPES = {
   qrReset: 'qrReset',
   topup: 'topup',
   manualBalanceAdjustment: 'manualBalanceAdjustment',
+  bulkBalanceAdjustment: 'bulkBalanceAdjustment',
   productChange: 'productChange',
   modifierTemplateChange: 'modifierTemplateChange',
   eventChange: 'eventChange',

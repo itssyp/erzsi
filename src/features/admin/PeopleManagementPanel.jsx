@@ -6,6 +6,7 @@ import { formatHuf, parseHufInteger } from '../../lib/money'
 import { ATTENDEE_TYPES, PERSON_RECORD_STATUSES, getAttendeeTypeLabel, getPersonDisplayId } from '../people/personModels'
 import {
   adjustPersonBalance,
+  bulkAdjustPersonBalance,
   deletePersonRecord,
   importPeopleFromRows,
   importPeopleFromText,
@@ -572,13 +573,14 @@ function QrImage({ value, size = 160 }) {
 function QrPoolRow({ cred, pending = false, onDelete = null }) {
   const [expanded, setExpanded] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const value = buildQrCredentialLink(cred.code) || cred.link || cred.code
+  const qrPayload = cred.code
+  const link = cred.link || buildQrCredentialLink(cred.code)
 
   async function handleDownload() {
-    if (!value) return
+    if (!qrPayload) return
     setDownloading(true)
     try {
-      const dataUrl = await QRCode.toDataURL(value, { width: 512, margin: 2, errorCorrectionLevel: 'M' })
+      const dataUrl = await QRCode.toDataURL(qrPayload, { width: 512, margin: 2, errorCorrectionLevel: 'M' })
       const a = document.createElement('a')
       a.href = dataUrl
       a.download = `qr-${cred.code}.png`
@@ -597,14 +599,14 @@ function QrPoolRow({ cred, pending = false, onDelete = null }) {
       <div className="qr-pool-row-main">
         <span className="qr-pool-row-info">
           <strong>{cred.code}</strong>
-          <small>{value || 'Link előkészítés alatt'}</small>
+          <small>{link || 'Link előkészítés alatt'}</small>
         </span>
         <span className="qr-pool-row-actions">
           <button
             type="button"
             className="secondary-button btn-sm"
             onClick={() => setExpanded((v) => !v)}
-            disabled={!value}
+            disabled={!qrPayload}
           >
             {expanded ? 'Elrejtés' : 'Megnyitás'}
           </button>
@@ -612,7 +614,7 @@ function QrPoolRow({ cred, pending = false, onDelete = null }) {
             type="button"
             className="secondary-button btn-sm"
             onClick={handleDownload}
-            disabled={downloading || !value}
+            disabled={downloading || !qrPayload}
           >
             {downloading ? '…' : '↓ PNG'}
           </button>
@@ -629,9 +631,9 @@ function QrPoolRow({ cred, pending = false, onDelete = null }) {
           ) : null}
         </span>
       </div>
-      {expanded && value ? (
+      {expanded && qrPayload ? (
         <div className="qr-inline-view">
-          <QrImage value={value} size={160} />
+          <QrImage value={qrPayload} size={160} />
           <span className="qr-inline-code">{cred.code}</span>
         </div>
       ) : null}
@@ -757,7 +759,7 @@ function QrPoolTab({
   const assignedCount = assignedQrCredentials.length
 
   async function handlePrintList(creds, key) {
-    const eligible = creds.filter((c) => c.link || c.code)
+    const eligible = creds.filter((c) => c.code)
     if (!eligible.length) return
     setPrintingKey(key)
     try {
@@ -766,8 +768,7 @@ function QrPoolTab({
       const renderPx = Math.max(200, Math.round(printSizeMm * 20))
       const items = await Promise.all(
         eligible.map(async (cred) => {
-          const value = buildQrCredentialLink(cred.code) || cred.link || cred.code
-          const dataUrl = await QRCode.toDataURL(value, { width: renderPx, margin: 1, errorCorrectionLevel: 'M' })
+          const dataUrl = await QRCode.toDataURL(cred.code, { width: renderPx, margin: 1, errorCorrectionLevel: 'M' })
           // Only attach a name when the checkbox is on AND the credential is linked
           // to a person we have in memory. Unlinked entries print code-only as before.
           const person = printIncludeNames && cred.assignedPersonaId
@@ -1032,6 +1033,22 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
   const [manualAmount, setManualAmount] = useState('')
   const [manualReason, setManualReason] = useState('')
   const [showDeleted, setShowDeleted] = useState(false)
+  // Mass-adjust: multi-select mode for applying one balance delta to many
+  // personas at once. `bulkSelectedIds` is the single source of truth for the
+  // selection regardless of how it was assembled (row checkboxes, team chips,
+  // attendee-type chips, or "select all matches").
+  const [bulkSelectMode, setBulkSelectMode] = useState(false)
+  const [bulkSelectedIds, setBulkSelectedIds] = useState(() => new Set())
+  const [bulkAmount, setBulkAmount] = useState('')
+  const [bulkReason, setBulkReason] = useState('')
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false)
+  const [bulkApplying, setBulkApplying] = useState(false)
+  const [bulkResult, setBulkResult] = useState(null)
+  const [bulkErrorMessage, setBulkErrorMessage] = useState('')
+  // Stable correlationId per confirm-modal flow. Set on open, kept across
+  // failed retries so the Cloud Function's idempotency check collapses
+  // duplicate applies. Reset on cancel and on successful apply.
+  const [bulkCorrelationId, setBulkCorrelationId] = useState(null)
   const [pending, setPending] = useState(false)
   const [activePersonTab, setActivePersonTab] = useState('profile')
   const activeTopTab = view === 'qrpool' ? 'qrpool' : view === 'topup' ? 'topup' : 'personas'
@@ -1091,6 +1108,177 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
   const selectedPerson = useMemo(() => {
     return people.find((person) => person.id === selectedPersonId) || null
   }, [people, selectedPersonId])
+
+  // ── Mass-adjust derived state ──────────────────────────────────────────
+  // parsedBulkAmount is a positive/negative integer or null (empty / invalid
+  // input). We accept HUF with optional whitespace / minus sign.
+  const parsedBulkAmount = useMemo(() => {
+    const raw = String(bulkAmount || '').trim()
+    if (!raw) return null
+    // parseHufInteger tolerates thousands separators; wrap minus manually
+    const signed = /^-/.test(raw) ? -Math.abs(parseHufInteger(raw.replace(/^-/, ''))) : parseHufInteger(raw)
+    if (!Number.isFinite(signed) || signed === 0) return null
+    return signed
+  }, [bulkAmount])
+
+  const bulkSelectedCount = bulkSelectedIds.size
+  const bulkTotalDelta = parsedBulkAmount != null ? parsedBulkAmount * bulkSelectedCount : 0
+
+  function toggleBulkSelectedId(id) {
+    setBulkSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function clearBulkSelection() {
+    setBulkSelectedIds(new Set())
+    setBulkAmount('')
+    setBulkReason('')
+  }
+
+  function exitBulkMode() {
+    setBulkSelectMode(false)
+    clearBulkSelection()
+  }
+
+  // Quick-select derived data — teams and attendee types found across the
+  // currently visible personas. Chips IGNORE the search filter so "select
+  // whole team" always means the whole team, regardless of what's on-screen.
+  const uniqueTeams = useMemo(() => {
+    const set = new Set()
+    visiblePeople.forEach((p) => { if (p.team) set.add(p.team) })
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'hu'))
+  }, [visiblePeople])
+
+  const attendeeTypeOptions = useMemo(() => [
+    { key: ATTENDEE_TYPES.organizer, label: getAttendeeTypeLabel(ATTENDEE_TYPES.organizer) },
+    { key: ATTENDEE_TYPES.freshman,  label: getAttendeeTypeLabel(ATTENDEE_TYPES.freshman) },
+  ], [])
+
+  function idsForTeam(team) {
+    return visiblePeople.filter((p) => p.team === team).map((p) => p.id)
+  }
+  function idsForAttendeeType(type) {
+    return visiblePeople.filter((p) => p.attendeeType === type).map((p) => p.id)
+  }
+  function isAllSelected(ids) {
+    if (!ids.length) return false
+    return ids.every((id) => bulkSelectedIds.has(id))
+  }
+  function toggleIdGroup(ids) {
+    if (!ids.length) return
+    const allSelected = isAllSelected(ids)
+    setBulkSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (allSelected) ids.forEach((id) => next.delete(id))
+      else ids.forEach((id) => next.add(id))
+      return next
+    })
+  }
+
+  // Count of currently-filtered personas not yet in the selection — drives
+  // the "Kijelölöm az összes találatot (N)" link visibility + count.
+  const filteredUnselectedCount = useMemo(() => {
+    return filteredVisiblePeople.reduce(
+      (n, p) => n + (bulkSelectedIds.has(p.id) ? 0 : 1),
+      0,
+    )
+  }, [filteredVisiblePeople, bulkSelectedIds])
+
+  // ── Bulk-apply plan derivation + Cloud Function orchestration ─────────
+  // Split the selected ids into "active" (will be applied to) and
+  // "deletedSkipped" (would be filtered out server-side anyway; surface it
+  // in the confirm modal so the admin isn't surprised by the mismatch).
+  const bulkPlan = useMemo(() => {
+    const selectedPersons = people.filter((p) => bulkSelectedIds.has(p.id))
+    const activePersons = selectedPersons.filter((p) => p.recordStatus !== PERSON_RECORD_STATUSES.deleted)
+    const deletedSkipped = selectedPersons.length - activePersons.length
+    const amount = parsedBulkAmount || 0
+    const goingNegative = activePersons.filter((p) => (p.balance || 0) + amount < 0)
+    const totalDelta = amount * activePersons.length
+
+    return {
+      selectedPersons,
+      activePersons,
+      deletedSkipped,
+      goingNegativeCount: goingNegative.length,
+      goingNegativePreview: goingNegative.slice(0, 3),
+      totalDelta,
+      preview: activePersons.slice(0, 3).map((p) => ({
+        id: p.id,
+        name: p.displayName,
+        before: p.balance || 0,
+        after: (p.balance || 0) + amount,
+      })),
+    }
+  }, [people, bulkSelectedIds, parsedBulkAmount])
+
+  const hasHugePerPerson = parsedBulkAmount != null && Math.abs(parsedBulkAmount) > 100_000
+  const hasHugeTotal = Math.abs(bulkPlan.totalDelta) > 1_000_000
+
+  async function performBulkApply() {
+    if (bulkPlan.activePersons.length === 0 || parsedBulkAmount == null) return
+    // Use the correlationId that was minted when the modal opened; if for
+    // some reason it's still null, generate one now.
+    const correlationId = bulkCorrelationId || crypto.randomUUID()
+    if (!bulkCorrelationId) setBulkCorrelationId(correlationId)
+    setBulkApplying(true)
+    setBulkErrorMessage('')
+    try {
+      const result = await bulkAdjustPersonBalance({
+        eventId,
+        personIds: bulkPlan.activePersons.map((p) => p.id),
+        amount: parsedBulkAmount,
+        reason: bulkReason.trim(),
+        correlationId,
+      })
+      setBulkResult({
+        applied: result.applied,
+        skipped: (result.skipped || []).length + bulkPlan.deletedSkipped,
+        failedChunks: result.failedChunks || 0,
+        totalDelta: parsedBulkAmount * result.applied,
+        amount: parsedBulkAmount,
+      })
+      setBulkConfirmOpen(false)
+      setBulkCorrelationId(null)
+      clearBulkSelection()
+    } catch (err) {
+      setBulkErrorMessage(normalizeFunctionError(err, 'A tömeges módosítás nem sikerült.'))
+    } finally {
+      setBulkApplying(false)
+    }
+  }
+
+  function openBulkConfirmModal() {
+    setBulkCorrelationId(crypto.randomUUID())
+    setBulkErrorMessage('')
+    setBulkConfirmOpen(true)
+  }
+
+  function closeBulkConfirmModal() {
+    setBulkConfirmOpen(false)
+    setBulkCorrelationId(null)
+    setBulkErrorMessage('')
+  }
+
+  function selectAllFilteredMatches() {
+    // Guard for accidental "select everyone" when search is empty and the
+    // resulting selection would be large — confirm before proceeding.
+    if (!personaSearch.trim() && filteredUnselectedCount > 100) {
+      const proceed = window.confirm(
+        `${filteredUnselectedCount} embert fogsz kijelölni. Biztos?`,
+      )
+      if (!proceed) return
+    }
+    setBulkSelectedIds((prev) => {
+      const next = new Set(prev)
+      filteredVisiblePeople.forEach((p) => next.add(p.id))
+      return next
+    })
+  }
 
   const linkedAccountIds = useMemo(() => {
     return new Set(
@@ -1660,9 +1848,10 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
         Csapat: person.team || '',
         Tipus: getAttendeeTypeLabel(person.attendeeType),
         Shibboleth: person.shibboleth || '',
+        Egyenleg: Number.isFinite(person.balance) ? person.balance : 0,
       }))
       const sheet = XLSX.utils.json_to_sheet(rows, {
-        header: ['Nev', 'Csapat', 'Tipus', 'Shibboleth'],
+        header: ['Nev', 'Csapat', 'Tipus', 'Shibboleth', 'Egyenleg'],
       })
       const workbook = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(workbook, sheet, 'Personas')
@@ -1824,6 +2013,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
                   autoComplete="off"
                 />
               </div>
+
               <div className="record-list personas-scroll-list">
                 {filteredVisiblePeople.map((person) => {
                   const completeness = buildPersonaCompleteness(person)
@@ -1980,14 +2170,26 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
                 <h4 className="card-title">Persona feltöltés</h4>
                 <p className="helper-text">Keress névre, vagy olvass be QR-t. A QR automatikusan az egyenleg panelre vált.</p>
               </div>
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={showDeleted}
-                  onChange={(e) => setShowDeleted(e.target.checked)}
-                />
-                <span style={{ fontSize: '0.78rem' }}>Töröltek</span>
-              </label>
+              <div className="personas-list-actions">
+                {allowManualAdjustment ? (
+                  <button
+                    type="button"
+                    className={`secondary-button btn-sm${bulkSelectMode ? ' is-active' : ''}`}
+                    onClick={() => (bulkSelectMode ? exitBulkMode() : setBulkSelectMode(true))}
+                    title="Több persona kijelölése tömeges egyenleg-módosításhoz"
+                  >
+                    {bulkSelectMode ? `Kijelölés (${bulkSelectedCount})` : 'Kijelölés'}
+                  </button>
+                ) : null}
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={showDeleted}
+                    onChange={(e) => setShowDeleted(e.target.checked)}
+                  />
+                  <span style={{ fontSize: '0.78rem' }}>Töröltek</span>
+                </label>
+              </div>
             </div>
 
             <div className="field personas-search-field">
@@ -2001,40 +2203,133 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
               />
             </div>
 
+            {bulkSelectMode ? (
+              <div className="persona-bulk-quickselect">
+                {uniqueTeams.length > 0 ? (
+                  <div className="persona-bulk-chiprow" role="group" aria-label="Gyors kijelölés csapatonként">
+                    <span className="persona-bulk-chiprow-label">Csapat:</span>
+                    {uniqueTeams.map((team) => {
+                      const ids = idsForTeam(team)
+                      const allSel = isAllSelected(ids)
+                      return (
+                        <button
+                          key={team}
+                          type="button"
+                          className={`persona-bulk-chip${allSel ? ' is-active' : ''}`}
+                          onClick={() => toggleIdGroup(ids)}
+                          title={`${team} (${ids.length} fő)`}
+                        >
+                          {team}
+                          <span className="persona-bulk-chip-count">{ids.length}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
+
+                <div className="persona-bulk-chiprow" role="group" aria-label="Gyors kijelölés típus szerint">
+                  <span className="persona-bulk-chiprow-label">Típus:</span>
+                  {attendeeTypeOptions.map(({ key, label }) => {
+                    const ids = idsForAttendeeType(key)
+                    const allSel = isAllSelected(ids)
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className={`persona-bulk-chip${allSel ? ' is-active' : ''}`}
+                        onClick={() => toggleIdGroup(ids)}
+                        title={`${label} (${ids.length} fő)`}
+                        disabled={ids.length === 0}
+                      >
+                        {label}
+                        <span className="persona-bulk-chip-count">{ids.length}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                {filteredUnselectedCount > 0 ? (
+                  <button
+                    type="button"
+                    className="persona-bulk-selectall"
+                    onClick={selectAllFilteredMatches}
+                  >
+                    Kijelölöm az összes {personaSearch.trim() ? 'találatot' : 'personát'} ({filteredUnselectedCount})
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="record-list personas-scroll-list">
               {filteredVisiblePeople.map((person) => {
                 const completeness = buildPersonaCompleteness(person)
                 const colors = COMPLETENESS_COLORS[completeness]
+                const isBulkSelected = bulkSelectMode && bulkSelectedIds.has(person.id)
+                const currentBalance = person.balance || 0
+                const showPendingPreview = bulkSelectMode && isBulkSelected && parsedBulkAmount != null
+                const previewBalance = showPendingPreview ? currentBalance + parsedBulkAmount : null
+                const goesNegative = showPendingPreview && previewBalance < 0
+                const handleClick = () => {
+                  if (bulkSelectMode) toggleBulkSelectedId(person.id)
+                  else selectPerson(person.id, 'balance')
+                }
                 return (
                   <button
                     key={person.id}
                     type="button"
-                    className={`record-row persona-record-row${selectedPersonId === person.id ? ' selected' : ''}`}
-                    onClick={() => selectPerson(person.id, 'balance')}
+                    className={`record-row persona-record-row${!bulkSelectMode && selectedPersonId === person.id ? ' selected' : ''}${isBulkSelected ? ' bulk-selected' : ''}`}
+                    onClick={handleClick}
                   >
-                    <CompletenessDot completeness={completeness} />
+                    {bulkSelectMode ? (
+                      <input
+                        type="checkbox"
+                        checked={isBulkSelected}
+                        readOnly
+                        tabIndex={-1}
+                        className="persona-row-checkbox"
+                        aria-label={`${person.displayName} kijelölése`}
+                      />
+                    ) : (
+                      <CompletenessDot completeness={completeness} />
+                    )}
                     <span className="persona-record-text">
                       <strong>{person.displayName}</strong>
                       <small>
                         {getPersonDisplayId(person)}
                         {person.team ? ` · ${person.team}` : ''}
+                        {bulkSelectMode && person.attendeeType ? ` · ${getAttendeeTypeLabel(person.attendeeType)}` : ''}
                       </small>
                     </span>
                     <span className="persona-record-side">
-                      <small style={{ fontWeight: 700 }}>{formatHuf(person.balance || 0)}</small>
-                      <small
-                        style={{
-                          fontSize: '0.68rem',
-                          padding: '1px 6px',
-                          borderRadius: '999px',
-                          border: `1px solid ${colors.border}`,
-                          background: colors.background,
-                          color: colors.color,
-                          fontWeight: 600,
-                        }}
-                      >
-                        {COMPLETENESS_LABELS[completeness]}
-                      </small>
+                      {showPendingPreview ? (
+                        <small className="persona-balance-preview">
+                          <span className="persona-balance-old">{formatHuf(currentBalance)}</span>
+                          <span className="persona-balance-arrow">→</span>
+                          <span
+                            className="persona-balance-new"
+                            style={{ color: goesNegative ? 'var(--danger)' : (parsedBulkAmount > 0 ? 'var(--success)' : 'var(--danger)') }}
+                          >
+                            {formatHuf(previewBalance)}
+                          </span>
+                        </small>
+                      ) : (
+                        <small style={{ fontWeight: 700 }}>{formatHuf(currentBalance)}</small>
+                      )}
+                      {!bulkSelectMode ? (
+                        <small
+                          style={{
+                            fontSize: '0.68rem',
+                            padding: '1px 6px',
+                            borderRadius: '999px',
+                            border: `1px solid ${colors.border}`,
+                            background: colors.background,
+                            color: colors.color,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {COMPLETENESS_LABELS[completeness]}
+                        </small>
+                      ) : null}
                     </span>
                   </button>
                 )
@@ -2046,6 +2341,83 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
                 <p className="helper-text">Nincs a keresésnek megfelelő persona.</p>
               )}
             </div>
+
+            {bulkSelectMode ? (
+              <div className="persona-bulk-actionbar">
+                <div className="persona-bulk-actionbar-summary">
+                  <strong>{bulkSelectedCount}</strong> kiválasztva
+                  {parsedBulkAmount != null && bulkSelectedCount > 0 ? (
+                    <small style={{ color: 'var(--muted)', marginLeft: '8px' }}>
+                      Teljes hatás: <strong style={{ color: parsedBulkAmount > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        {parsedBulkAmount > 0 ? '+' : ''}{formatHuf(bulkTotalDelta)}
+                      </strong>
+                    </small>
+                  ) : null}
+                </div>
+                <div className="persona-bulk-actionbar-fields">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={bulkAmount}
+                    onChange={(e) => setBulkAmount(e.target.value)}
+                    placeholder="Összeg (HUF, - negatívra)"
+                    className="persona-bulk-amount-input"
+                  />
+                  <input
+                    type="text"
+                    value={bulkReason}
+                    onChange={(e) => setBulkReason(e.target.value)}
+                    placeholder="Indoklás (opcionális)"
+                    className="persona-bulk-reason-input"
+                  />
+                </div>
+                <div className="persona-bulk-actionbar-buttons">
+                  <button
+                    type="button"
+                    className="secondary-button btn-sm"
+                    onClick={clearBulkSelection}
+                    disabled={bulkSelectedCount === 0 && !bulkAmount && !bulkReason}
+                  >
+                    Kijelölés törlése
+                  </button>
+                  <button
+                    type="button"
+                    className="primary-button btn-sm"
+                    disabled={bulkSelectedCount === 0 || parsedBulkAmount == null || bulkApplying}
+                    onClick={openBulkConfirmModal}
+                  >
+                    Alkalmaz
+                    {parsedBulkAmount != null ? ` ${parsedBulkAmount > 0 ? '+' : ''}${parsedBulkAmount} × ${bulkSelectedCount}` : ''}
+                  </button>
+                </div>
+                {bulkErrorMessage ? (
+                  <div className="error-banner" style={{ flex: '1 1 100%' }}>
+                    {bulkErrorMessage}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {bulkResult ? (
+              <div className="persona-bulk-result" role="status" aria-live="polite">
+                <span>
+                  <strong>Tömeges módosítás kész.</strong>{' '}
+                  Alkalmazva: {bulkResult.applied} · Kihagyva: {bulkResult.skipped}
+                  {bulkResult.failedChunks > 0 ? ` · Hiba: ${bulkResult.failedChunks} részlet` : ''}
+                  {' — Teljes hatás: '}
+                  <strong style={{ color: bulkResult.amount > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                    {bulkResult.amount > 0 ? '+' : ''}{formatHuf(bulkResult.totalDelta)}
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button btn-sm"
+                  onClick={() => setBulkResult(null)}
+                >
+                  Bezárás
+                </button>
+              </div>
+            ) : null}
           </section>
 
           <section className="panel">
@@ -2088,6 +2460,146 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
           </section>
         </div>
       )}
+
+      {/* Bulk-adjust confirmation modal. Lives at panel root so it renders
+          on top of whichever tab is currently active (only opened from the
+          topup view today, but positioned so any view could trigger it). */}
+      {bulkConfirmOpen ? (
+        <>
+          <div
+            className="modal-backdrop"
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(3px)', zIndex: 999 }}
+            onClick={() => (bulkApplying ? null : closeBulkConfirmModal())}
+          />
+          <div
+            className="floating-overlay persona-bulk-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bulkConfirmTitle"
+            style={{
+              position: 'fixed',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: 'min(560px, calc(100vw - 32px))',
+              maxHeight: 'calc(100vh - 40px)',
+              overflowY: 'auto',
+              zIndex: 1000,
+              background: 'white',
+              borderRadius: 'var(--radius-lg)',
+              boxShadow: 'var(--shadow-lg)',
+              padding: '20px 24px',
+            }}
+          >
+            <div className="page-heading" style={{ marginBottom: '12px' }}>
+              <span className="eyebrow">Tömeges egyenleg-módosítás</span>
+              <h4 id="bulkConfirmTitle">
+                {bulkPlan.activePersons.length} fő egyenlegét módosítod{' '}
+                <strong style={{ color: parsedBulkAmount > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                  {parsedBulkAmount > 0 ? '+' : ''}{formatHuf(parsedBulkAmount || 0)}
+                </strong>-tal.
+              </h4>
+              <p className="muted" style={{ marginTop: '2px' }}>
+                Teljes hatás:{' '}
+                <strong style={{ color: parsedBulkAmount > 0 ? 'var(--success)' : 'var(--danger)' }}>
+                  {parsedBulkAmount > 0 ? '+' : ''}{formatHuf(bulkPlan.totalDelta)}
+                </strong>
+              </p>
+            </div>
+
+            {bulkPlan.preview.length > 0 ? (
+              <ul className="detail-list" style={{ marginBottom: '10px' }}>
+                {bulkPlan.preview.map((p) => (
+                  <li key={p.id}>
+                    <strong>{p.name}</strong>
+                    <span>{formatHuf(p.before)} → {formatHuf(p.after)}</span>
+                  </li>
+                ))}
+                {bulkPlan.activePersons.length > bulkPlan.preview.length ? (
+                  <li>
+                    <span style={{ color: 'var(--muted)' }}>
+                      … és további {bulkPlan.activePersons.length - bulkPlan.preview.length} fő
+                    </span>
+                  </li>
+                ) : null}
+              </ul>
+            ) : null}
+
+            {bulkReason.trim() ? (
+              <p style={{ marginTop: '8px' }}>
+                <span className="eyebrow">Indoklás</span>
+                <br />
+                <em>&ldquo;{bulkReason.trim()}&rdquo;</em>
+              </p>
+            ) : null}
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+              {bulkPlan.deletedSkipped > 0 ? (
+                <StatusCard
+                  tone="warning"
+                  title={`${bulkPlan.deletedSkipped} törölt persona kihagyva`}
+                  body="A törölt személyek nem kapnak egyenleg-módosítást. Ha vissza szeretnéd állítani őket, előbb tedd meg."
+                />
+              ) : null}
+              {bulkPlan.goingNegativeCount > 0 ? (
+                <StatusCard
+                  tone="warning"
+                  title={`${bulkPlan.goingNegativeCount} persona mínuszba kerül`}
+                  body={
+                    bulkPlan.goingNegativePreview.map((p) => `${p.displayName} (${formatHuf(p.balance || 0)})`).join(', ')
+                    + (bulkPlan.goingNegativeCount > bulkPlan.goingNegativePreview.length ? ' és mások' : '')
+                  }
+                />
+              ) : null}
+              {hasHugePerPerson ? (
+                <StatusCard
+                  tone="warning"
+                  title="Nagyon nagy összeg fejenként"
+                  body={`Az összeg abszolút értékben ${formatHuf(Math.abs(parsedBulkAmount || 0))}. Biztos, hogy jó?`}
+                />
+              ) : null}
+              {hasHugeTotal ? (
+                <StatusCard
+                  tone="warning"
+                  title="Nagyon nagy teljes hatás"
+                  body={`Teljes eltérés: ${formatHuf(bulkPlan.totalDelta)}. Kérünk, ellenőrizd az érintettek számát.`}
+                />
+              ) : null}
+            </div>
+
+            {bulkErrorMessage ? (
+              <div className="error-banner" style={{ marginTop: '10px' }}>
+                {bulkErrorMessage}
+              </div>
+            ) : null}
+
+            <p className="helper-text" style={{ marginTop: '10px' }}>
+              Ez az akció <strong>nem visszavonható</strong>. Ha téves, futtass egy ellentétes módosítást.
+            </p>
+
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '16px' }}>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={closeBulkConfirmModal}
+                disabled={bulkApplying}
+              >
+                Mégse
+              </button>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={performBulkApply}
+                disabled={bulkApplying || bulkPlan.activePersons.length === 0}
+              >
+                {bulkApplying
+                  ? 'Alkalmazás…'
+                  : `Alkalmaz ${parsedBulkAmount > 0 ? '+' : ''}${parsedBulkAmount || 0} × ${bulkPlan.activePersons.length}`}
+              </button>
+            </div>
+          </div>
+        </>
+      ) : null}
 
       {activeTopTab === 'qrpool' && (
         <QrPoolTab

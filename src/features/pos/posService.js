@@ -18,6 +18,13 @@ import {
 } from './basketModels'
 import { EVENT_SUBCOLLECTIONS, getEventCollectionPath, getEventPath, getEventScopedPath } from '../../lib/firestorePaths'
 import { resolveAssignedQrToPerson } from '../qr/qrService'
+import {
+  aggregateStockLineDeltas,
+  aggregateStockRefundDeltas,
+  buildStockMovementRecord,
+  parseStockInteger,
+  STOCK_MOVEMENT_TYPES,
+} from '../stock/stockModels'
 
 const STALE_BASKET_LOCK_MS = 45 * 1000
 
@@ -112,6 +119,78 @@ function buildOrderAuditItems(items) {
     const customization = buildCustomizationAuditDetails(item.customization)
 
     return customization ? { ...auditItem, customization } : auditItem
+  })
+}
+
+function buildStockItemRef(eventId, stockItemId) {
+  return doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.stockItems, stockItemId))
+}
+
+function buildStockMovementRef(eventId) {
+  return doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.stockMovements)))
+}
+
+async function readStockSnapshots(transaction, eventId, stockDeltas) {
+  const pairs = await Promise.all(
+    stockDeltas.map(async (delta) => {
+      const ref = buildStockItemRef(eventId, delta.stockItemId)
+      const snapshot = await transaction.get(ref)
+      return [delta.stockItemId, { ref, snapshot }]
+    }),
+  )
+
+  return new Map(pairs)
+}
+
+function writeStockDeltas({
+  transaction,
+  eventId,
+  stockDeltas,
+  stockSnapshots,
+  type,
+  orderId,
+  actorUid,
+  actorName,
+}) {
+  stockDeltas.forEach((delta) => {
+    const stockRead = stockSnapshots.get(delta.stockItemId)
+    const stockExists = stockRead?.snapshot.exists()
+    const stockItem = stockExists
+      ? { id: stockRead.snapshot.id, ...stockRead.snapshot.data() }
+      : { id: delta.stockItemId, name: delta.stockItemName, unit: 'piece', currentQuantity: null }
+    const quantityBefore = stockExists ? parseStockInteger(stockItem.currentQuantity, 0) : null
+    const quantityAfter = stockExists ? quantityBefore + delta.quantityDelta : null
+
+    if (stockExists) {
+      transaction.set(
+        stockRead.ref,
+        {
+          currentQuantity: quantityAfter,
+          updatedAt: serverTimestamp(),
+          updatedBy: actorUid,
+        },
+        { merge: true },
+      )
+    }
+    transaction.set(
+      buildStockMovementRef(eventId),
+      buildStockMovementRecord({
+        stockItemId: delta.stockItemId,
+        stockItemName: stockItem.name || delta.stockItemName,
+        unit: stockItem.unit || 'piece',
+        quantityDelta: delta.quantityDelta,
+        quantityBefore,
+        quantityAfter,
+        type,
+        reason: stockExists ? '' : 'Missing stock item during POS stock write',
+        orderId,
+        lineId: delta.productRefs?.length === 1 ? delta.productRefs[0].lineId : null,
+        productId: delta.productRefs?.length === 1 ? delta.productRefs[0].productId : null,
+        productName: delta.productRefs?.length === 1 ? delta.productRefs[0].productName : null,
+        actorUid,
+        actorName,
+      }),
+    )
   })
 }
 
@@ -344,6 +423,8 @@ export async function finalizeBasket({
 
     const basketSummary = summarizeBasketItems(basket.items)
     const totalAmount = basket.totalAmount ?? basketSummary.totalAmount
+    const saleStockDeltas = aggregateStockLineDeltas(basketSummary.items)
+    const saleStockSnapshots = await readStockSnapshots(transaction, eventId, saleStockDeltas)
     const finalizedBasket = {
       ...basket,
       items: basketSummary.items,
@@ -414,6 +495,16 @@ export async function finalizeBasket({
         }),
       )
     }
+    writeStockDeltas({
+      transaction,
+      eventId,
+      stockDeltas: saleStockDeltas,
+      stockSnapshots: saleStockSnapshots,
+      type: STOCK_MOVEMENT_TYPES.sale,
+      orderId: orderRef.id,
+      actorUid: staffUid,
+      actorName: staffName,
+    })
     transaction.set(
       auditLogWrite.ref,
       {
@@ -484,6 +575,8 @@ export async function refundOrderLineQuantity({
       throw new Error('Refund quantity exceeds the remaining refundable quantity.')
     }
 
+    const refundStockDeltas = aggregateStockRefundDeltas(targetLine, quantity)
+    const refundStockSnapshots = await readStockSnapshots(transaction, eventId, refundStockDeltas)
     const refundAmount = targetLine.unitTotal * quantity
     const balanceBefore = person.balance || 0
     const balanceAfter = balanceBefore + refundAmount
@@ -552,6 +645,16 @@ export async function refundOrderLineQuantity({
         reason: `${orderId}:${lineId}`,
       }),
     )
+    writeStockDeltas({
+      transaction,
+      eventId,
+      stockDeltas: refundStockDeltas,
+      stockSnapshots: refundStockSnapshots,
+      type: STOCK_MOVEMENT_TYPES.refund,
+      orderId,
+      actorUid,
+      actorName,
+    })
     transaction.set(auditLogWrite.ref, auditLogWrite.data)
 
     return {

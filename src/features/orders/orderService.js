@@ -15,6 +15,12 @@ import { createAuditLogWrite } from '../audit/auditService'
 import { AUDIT_TYPES } from '../audit/auditModels'
 import { FOOD_ORDER_STATUSES } from './orderModels'
 import { buildLedgerEntryRecord, LEDGER_ENTRY_TYPES } from '../ledger/ledgerModels'
+import {
+  aggregateStockRefundDeltas,
+  buildStockMovementRecord,
+  parseStockInteger,
+  STOCK_MOVEMENT_TYPES,
+} from '../stock/stockModels'
 
 export function subscribeOrdersForPerson(eventId, personId, onNext, onError) {
   return onSnapshot(
@@ -116,6 +122,8 @@ export async function updateFoodOrderStatus({
     throw new Error('Station is required for kitchen status updates.')
   }
 
+  const safeActorUid = actorUid || null
+  const safeActorName = actorName || 'Staff device'
   const orderRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.orders, orderId))
 
   await runTransaction(db, async (transaction) => {
@@ -161,7 +169,7 @@ export async function updateFoodOrderStatus({
     const auditLogWrite = createAuditLogWrite({
       eventId,
       type: AUDIT_TYPES.kitchenStatusChange,
-      actorUid,
+      actorUid: safeActorUid,
       summary: `Kitchen ${station} ${currentStationStatus} → ${nextStatus}`,
       targetType: 'order',
       targetId: orderId,
@@ -174,27 +182,39 @@ export async function updateFoodOrderStatus({
       },
     })
 
-    transaction.set(
-      orderRef,
-      {
-        // Per-station maps. Using dot notation for the individual key keeps
-        // sibling keys (other stations) intact when merge:true is set.
-        [`foodStatusByStation.${station}`]: nextStatus,
-        [`foodStatusUpdatedAtByStation.${station}`]: serverTimestamp(),
-        [`foodStatusUpdatedByByStation.${station}`]: { uid: actorUid, name: actorName },
-        // If we just materialized the map for an old order, write the whole
-        // map so the other stations get persisted alongside.
-        ...(!order.foodStatusByStation ? { foodStatusByStation: byStation } : {}),
-        // Legacy single field kept in sync with the derived overall status so
-        // POS workload and subscribeFoodOrders keep working unchanged.
-        foodStatus: overall,
-        foodStatusUpdatedAt: serverTimestamp(),
-        foodStatusUpdatedByUid: actorUid,
-        foodStatusUpdatedByName: actorName,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    )
+    const update = {
+      // Legacy single field kept in sync with the derived overall status so
+      // POS workload and subscribeFoodOrders keep working unchanged.
+      foodStatus: overall,
+      foodStatusUpdatedAt: serverTimestamp(),
+      foodStatusUpdatedByUid: safeActorUid,
+      foodStatusUpdatedByName: safeActorName,
+      updatedAt: serverTimestamp(),
+    }
+
+    // For the per-station maps we use NESTED OBJECT MERGING instead of dot
+    // notation. Firestore's dot-notation field paths only apply to
+    // .update() / .transaction.update() — with .set({ merge: true }), a key
+    // like "foodStatusByStation.burger" is treated as a literal top-level
+    // field name containing a dot, so the write ends up in the wrong place
+    // and the actual nested map is never touched. That looked exactly like
+    // "the button spins and nothing happens" — silent no-op.
+    //
+    // { merge: true } recursively merges nested maps, so writing just
+    // `{ [station]: nextStatus }` preserves sibling-station statuses.
+    if (order.foodStatusByStation) {
+      update.foodStatusByStation = { [station]: nextStatus }
+      update.foodStatusUpdatedAtByStation = { [station]: serverTimestamp() }
+      update.foodStatusUpdatedByByStation = { [station]: { uid: safeActorUid, name: safeActorName } }
+    } else {
+      // First materialization — write the full computed map for old orders
+      // so the other stations get their initial statuses persisted too.
+      update.foodStatusByStation = byStation
+      update.foodStatusUpdatedAtByStation = { [station]: serverTimestamp() }
+      update.foodStatusUpdatedByByStation = { [station]: { uid: safeActorUid, name: safeActorName } }
+    }
+
+    transaction.set(orderRef, update, { merge: true })
     transaction.set(auditLogWrite.ref, auditLogWrite.data)
   })
 }
@@ -237,6 +257,103 @@ function _deriveOverallFoodStatus(byStation) {
   return order[minIdx] || FOOD_ORDER_STATUSES.new
 }
 
+function buildStockItemRef(eventId, stockItemId) {
+  return doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.stockItems, stockItemId))
+}
+
+function buildStockMovementRef(eventId) {
+  return doc(collection(db, getEventCollectionPath(eventId, EVENT_SUBCOLLECTIONS.stockMovements)))
+}
+
+async function readStockSnapshots(transaction, eventId, stockDeltas) {
+  const pairs = await Promise.all(
+    stockDeltas.map(async (delta) => {
+      const ref = buildStockItemRef(eventId, delta.stockItemId)
+      const snapshot = await transaction.get(ref)
+      return [delta.stockItemId, { ref, snapshot }]
+    }),
+  )
+
+  return new Map(pairs)
+}
+
+function mergeStockDelta(target, delta) {
+  const current = target.get(delta.stockItemId) || {
+    stockItemId: delta.stockItemId,
+    stockItemName: delta.stockItemName || '',
+    quantityDelta: 0,
+    productRefs: [],
+  }
+
+  current.quantityDelta += delta.quantityDelta
+  current.productRefs.push(...(delta.productRefs || []))
+  target.set(delta.stockItemId, current)
+}
+
+function aggregateFullOrderRefundStockDeltas(lines) {
+  const aggregate = new Map()
+
+  ;(lines || []).forEach((line) => {
+    const remainingQuantity = (line.quantity || 0) - (line.refundedQuantity || 0)
+    aggregateStockRefundDeltas(line, remainingQuantity).forEach((delta) => {
+      mergeStockDelta(aggregate, delta)
+    })
+  })
+
+  return Array.from(aggregate.values()).filter((delta) => delta.quantityDelta !== 0)
+}
+
+function writeStockDeltas({
+  transaction,
+  eventId,
+  stockDeltas,
+  stockSnapshots,
+  type,
+  orderId,
+  actorUid,
+}) {
+  stockDeltas.forEach((delta) => {
+    const stockRead = stockSnapshots.get(delta.stockItemId)
+    const stockExists = stockRead?.snapshot.exists()
+    const stockItem = stockExists
+      ? { id: stockRead.snapshot.id, ...stockRead.snapshot.data() }
+      : { id: delta.stockItemId, name: delta.stockItemName, unit: 'piece', currentQuantity: null }
+    const quantityBefore = stockExists ? parseStockInteger(stockItem.currentQuantity, 0) : null
+    const quantityAfter = stockExists ? quantityBefore + delta.quantityDelta : null
+
+    if (stockExists) {
+      transaction.set(
+        stockRead.ref,
+        {
+          currentQuantity: quantityAfter,
+          updatedAt: serverTimestamp(),
+          updatedBy: actorUid,
+        },
+        { merge: true },
+      )
+    }
+
+    transaction.set(
+      buildStockMovementRef(eventId),
+      buildStockMovementRecord({
+        stockItemId: delta.stockItemId,
+        stockItemName: stockItem.name || delta.stockItemName,
+        unit: stockItem.unit || 'piece',
+        quantityDelta: delta.quantityDelta,
+        quantityBefore,
+        quantityAfter,
+        type,
+        reason: stockExists ? '' : 'Missing stock item during refund',
+        orderId,
+        lineId: delta.productRefs?.length === 1 ? delta.productRefs[0].lineId : null,
+        productId: delta.productRefs?.length === 1 ? delta.productRefs[0].productId : null,
+        productName: delta.productRefs?.length === 1 ? delta.productRefs[0].productName : null,
+        actorUid,
+      }),
+    )
+  })
+}
+
 export async function refundOrder({ eventId, orderId, actorUid }) {
   const orderRef = doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.orders, orderId))
   const personRef = (personId) => doc(db, getEventScopedPath(eventId, EVENT_SUBCOLLECTIONS.people, personId))
@@ -263,6 +380,8 @@ export async function refundOrder({ eventId, orderId, actorUid }) {
     }
 
     const person = personSnapshot.data()
+    const refundStockDeltas = aggregateFullOrderRefundStockDeltas(order.lines)
+    const refundStockSnapshots = await readStockSnapshots(transaction, eventId, refundStockDeltas)
     const balanceBefore = person.balance || 0
     const balanceAfter = balanceBefore + refundableAmount
 
@@ -307,6 +426,15 @@ export async function refundOrder({ eventId, orderId, actorUid }) {
         reason: `Refund for order ${orderId}`,
       }),
     )
+    writeStockDeltas({
+      transaction,
+      eventId,
+      stockDeltas: refundStockDeltas,
+      stockSnapshots: refundStockSnapshots,
+      type: STOCK_MOVEMENT_TYPES.refund,
+      orderId,
+      actorUid,
+    })
 
     const auditLogWrite = createAuditLogWrite({
       eventId,

@@ -2,6 +2,7 @@ import { serverTimestamp } from 'firebase/firestore'
 import { DRS_DEPOSIT_AMOUNT } from '../drs/drsModels'
 import { normalizeProductCategory } from '../products/productModels'
 import { getPersonDisplayId } from '../people/personModels'
+import { buildStockConsumptionForProduct } from '../stock/stockModels'
 
 export const BASKET_STATUSES = {
   open: 'open',
@@ -71,8 +72,11 @@ export function buildBasketLineMergeKey(productId, customization) {
   const extras = (customization.extras || [])
     .map((item) => `${item.id}:${item.quantity}`)
     .join(',')
+  const stockSelections = (customization.stockSelections || [])
+    .map((item) => `${item.groupId}:${item.optionId}`)
+    .join(',')
 
-  return `${productId}::${includedIngredients}::${removedIngredients}::${extras}`
+  return `${productId}::${includedIngredients}::${removedIngredients}::${extras}::${stockSelections}`
 }
 
 export function normalizeBasketItems(items) {
@@ -134,8 +138,13 @@ export function buildBasketLine({
         includedIngredients: customization.includedIngredients || [],
         removedIngredients: customization.removedIngredients || [],
         extras: customization.extras || [],
+        stockSelections: customization.stockSelections || [],
       }
     : null
+  const stockConsumption = buildStockConsumptionForProduct(
+    product,
+    normalizedCustomization?.stockSelections || [],
+  )
 
   const unitPrice = product.price
   const extrasUnitTotal = (normalizedCustomization?.extras || []).reduce(
@@ -157,6 +166,7 @@ export function buildBasketLine({
     lineTotal: unitPrice + extrasUnitTotal,
     modifierTemplateId: product.modifierTemplateId || null,
     customization: normalizedCustomization,
+    stockConsumption,
   }
 }
 
