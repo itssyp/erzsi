@@ -76,6 +76,52 @@ function formatHuf(value) {
   return `${Number(value || 0).toLocaleString('hu-HU')} HUF`
 }
 
+// Balance-changing logs (topup, manual / bulk-per-person adjustment, DRS return,
+// refund) store the amount under different keys, but all of them record the
+// balance before and after. We show the change wherever that pair exists.
+function getBalanceChange(log) {
+  const details = log.details
+  if (!details) return null
+
+  const { balanceBefore, balanceAfter } = details
+  if (!Number.isFinite(balanceBefore) || !Number.isFinite(balanceAfter)) return null
+
+  const amountCandidates = [details.amount, details.totalCreditAmount, details.refundableAmount]
+  const explicitAmount = amountCandidates.find((value) => Number.isFinite(value))
+  const amount = Number.isFinite(explicitAmount) ? explicitAmount : balanceAfter - balanceBefore
+
+  return {
+    amount,
+    balanceBefore,
+    balanceAfter,
+    reason: typeof details.reason === 'string' && details.reason.trim() ? details.reason.trim() : null,
+  }
+}
+
+function formatSignedHuf(value) {
+  const sign = value > 0 ? '+' : value < 0 ? '−' : ''
+  return `${sign}${formatHuf(Math.abs(value))}`
+}
+
+function BalanceChangeDetails({ log }) {
+  const change = getBalanceChange(log)
+  if (!change) return null
+
+  const direction = change.amount > 0 ? 'positive' : change.amount < 0 ? 'negative' : 'neutral'
+
+  return (
+    <div className="audit-order-products">
+      <span className={`audit-balance-change audit-balance-change-${direction}`}>
+        <strong>{formatSignedHuf(change.amount)}</strong>
+        <span>
+          Egyenleg: {formatHuf(change.balanceBefore)} → {formatHuf(change.balanceAfter)}
+        </span>
+        {change.reason ? <span className="audit-balance-reason">Indoklás: {change.reason}</span> : null}
+      </span>
+    </div>
+  )
+}
+
 function getOrderAuditItems(log) {
   if (log.type !== AUDIT_TYPES.orderFinalization) return []
   return Array.isArray(log.details?.items) ? log.details.items : []
@@ -126,6 +172,12 @@ function formatTargetLabel(log, peopleById) {
   return log.targetType || '-'
 }
 
+function buildBalanceChangeSearchText(log) {
+  const change = getBalanceChange(log)
+  if (!change) return ''
+  return [change.amount, Math.abs(change.amount), change.balanceAfter, change.reason].filter((value) => value !== null).join(' ')
+}
+
 function buildSearchText(log, peopleById, accountsById) {
   return [
     buildReadableSummary(log, peopleById),
@@ -137,6 +189,7 @@ function buildSearchText(log, peopleById, accountsById) {
     log.targetType,
     log.targetId,
     buildOrderItemsSearchText(log),
+    buildBalanceChangeSearchText(log),
     formatTimestamp(log.createdAt),
   ].filter(Boolean).join(' ').toLowerCase()
 }
@@ -438,6 +491,7 @@ export function AuditLogPanel({ eventId: defaultEventId, activeEventId, actorUid
                           <span className="audit-trail-target">{targetLabel}</span>
                         ) : null}
                       </div>
+                      {!isOrderLog ? <BalanceChangeDetails log={log} /> : null}
                       {isOrderLog ? (
                         <OrderFinalizationItems
                           log={log}

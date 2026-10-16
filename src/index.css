@@ -3829,6 +3829,41 @@ textarea:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.audit-balance-change {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 3px 9px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+}
+
+.audit-balance-change strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-balance-change-positive strong {
+  color: var(--success);
+}
+
+.audit-balance-change-negative strong {
+  color: var(--danger);
+}
+
+.audit-balance-change-neutral strong {
+  color: var(--text);
+}
+
+.audit-balance-reason {
+  font-weight: 500;
+}
+
 .audit-order-items {
   display: grid;
   gap: 2px;
