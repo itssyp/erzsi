@@ -10,6 +10,7 @@ import { httpsCallable } from 'firebase/functions'
 import { auth, db, functions } from '../../lib/firebase'
 import { getAccountPath } from '../../lib/firestorePaths'
 import { ROLES } from '../../lib/roles'
+import { disableFoodPush } from '../user/foodPushService'
 import { buildAccountRecord } from './accountModels'
 
 const bootstrapAdminSessionCallable = httpsCallable(functions, 'bootstrapAdminSession')
@@ -52,6 +53,10 @@ export async function registerUser({ displayName, email, password, shibboleth })
 }
 
 export async function signOutUser() {
+  if (auth.currentUser) {
+    // A shared browser must stop receiving the previous participant's alerts.
+    await disableFoodPush(auth.currentUser.uid).catch(() => {})
+  }
   await signOut(auth)
 }
 

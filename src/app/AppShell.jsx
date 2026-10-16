@@ -4,7 +4,8 @@ import { signOutUser } from '../features/auth/authService'
 import { useAuth } from '../features/auth/useAuth'
 import { useActiveEvent } from '../features/events/useActiveEvent'
 import { usePosSession } from '../features/pos/usePosSession'
-import { ROLES, canManageCatalog, canUseTopup, isStaffLike } from '../lib/roles'
+import { ROLES, canManageCatalog, canUseKitchen, canUseTopup, canViewStatistics, isStaffLike } from '../lib/roles'
+import { enableFoodPush, isFoodPushEnabled, listenForFoodPush } from '../features/user/foodPushService'
 
 const LOGO_SRC = '/kasszas_erzsi_nobg.png'
 const ENV_LABEL = import.meta.env.VITE_APP_ENV_LABEL || ''
@@ -13,6 +14,7 @@ const ROLE_LABELS = {
   [ROLES.admin]: 'Admin',
   [ROLES.staff]: 'Büfés',
   [ROLES.posStaff]: 'Beugrós',
+  [ROLES.headPos]: 'Főbüfé',
   [ROLES.topupStaff]: 'Paku',
   [ROLES.user]: 'Vendég',
 }
@@ -22,6 +24,8 @@ const PAGE_TITLES = {
   '/staff': 'Pult',
   '/staff/kitchen': 'Konyha',
   '/catalog': 'Katalógus',
+  '/menu': 'Kínálat',
+  '/statistics': 'Statisztika',
   '/topup': 'Feltöltés',
   '/admin': 'Admin',
 }
@@ -48,6 +52,32 @@ export function AppShell() {
   useEffect(() => {
     setIsMenuOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    if (role !== ROLES.user) return undefined
+    let cancelled = false
+    let stop = () => {}
+    listenForFoodPush().then((unsubscribe) => {
+      if (cancelled) unsubscribe()
+      else stop = unsubscribe
+    }).catch(() => {})
+    return () => {
+      cancelled = true
+      stop()
+    }
+  }, [role])
+
+  useEffect(() => {
+    if (role !== ROLES.user || !user?.uid) return
+    isFoodPushEnabled(user.uid)
+      .then((enabled) => {
+        if (enabled && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          return enableFoodPush(user.uid, { requestPermission: false })
+        }
+        return null
+      })
+      .catch(() => {})
+  }, [role, user?.uid])
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -86,16 +116,24 @@ export function AppShell() {
     const links = []
     if (isStaffLike(role)) {
       links.push({ to: '/staff', label: 'Pult' })
+    }
+    if (canUseKitchen(role)) {
       links.push({ to: '/staff/kitchen', label: 'Konyha' })
     }
     if (canManageCatalog(role)) {
       links.push({ to: '/catalog', label: 'Katalógus' })
+    }
+    if (canViewStatistics(role)) {
+      links.push({ to: '/statistics', label: 'Statisztika' })
     }
     if (canUseTopup(role)) {
       links.push({ to: '/topup', label: 'Feltöltés' })
     }
     if (role === ROLES.admin) {
       links.push({ to: '/admin', label: 'Admin' })
+    }
+    if (role === ROLES.user) {
+      links.push({ to: '/menu', label: 'Kínálat' })
     }
     links.push({ to: '/app', label: 'Saját irányítópult' })
     return links

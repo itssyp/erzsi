@@ -51,24 +51,28 @@ Frontend-only restrictions must never be treated as sufficient. For example the 
 
 Legend: R read, W intended write/use, L limited field write, — unavailable. This combines intended UI and backend enforcement; caveats follow.
 
-| Capability | user | topup_staff | pos_staff | staff | admin |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Own account/profile | R/W limited | R/W limited | R/W limited | R/W limited | R/W/all accounts |
-| Account directory | — | R | R | R | R/W via Functions |
-| Join event / own link | W via Function / R | same | same | same | same + manage links |
-| Read event/catalog/stock | R | R | R | R | R |
-| Read people | own linked | all | all | all | all |
-| Positive top-up | — | Function | — | — | Function |
-| POS baskets/orders/refunds | — | — | W | W | W |
-| Kitchen and availability | — | — | W/L | W/L | W/L |
-| Manage people | — | — | — | W | W |
-| Manage catalog/stock | — | — | — | W | W |
-| QR pool/manage assignment | own self-claim Function | resolve only | resolve only | resolve only | R/W/Functions |
-| Manage events/runtime | — | — | kitchen flag only | kitchen flag only | W |
-| Manual/bulk balance adjustment | — | — | — | UI: —; Rules permit person update | W |
-| Ledger | — | R | R/W | R/W | R/W |
-| Audit logs | — | — | W but not R | W but not R | R/W |
-| Analytics/audit UI | — | — | — | — | R |
+| Capability | user | topup_staff | pos_staff | staff | head_pos | admin |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Own account/profile | R/W limited | R/W limited | R/W limited | R/W limited | R/W limited | R/W/all accounts |
+| Account directory | — | R | R | R | R | R/W via Functions |
+| Join event / own link | W via Function / R | same | same | same | same | same + manage links |
+| Read event/catalog/stock | R | R | R | R | R | R |
+| Read people | own linked | all | all | all | all | all |
+| Positive top-up callable/page | — | W | — | — | — | W |
+| POS baskets/orders/refunds | — | — | W | W | W | W |
+| Kitchen page | — | — | W | W | — | W |
+| POS availability toggle | — | — | L | L | L | L |
+| Manage people | — | — | — | W | — | W |
+| Manage catalog/stock | — | — | — | W | W | W |
+| QR pool/manage assignment | own self-claim Function | resolve only | resolve only | resolve only | resolve only | R/W/Functions |
+| Manage events/runtime | — | — | kitchen flag only | kitchen flag only | — | W |
+| Manual/bulk balance adjustment UI | — | — | — | — | — | W |
+| Ledger | — | R | R/W | R/W | R/W | R/W |
+| Audit logs | — | — | W but not R | W but not R | W but not R | R/W |
+| Statistics page | — | — | — | — | R | R |
+| Admin page | — | — | — | — | — | W |
+
+The POS Rules branch also permits limited direct balance updates for `head_pos`, as it does for `pos_staff`. This is broader than the top-up page/callable permission and remains part of the direct-client accounting risk described in the architectural assessment.
 
 ## Firestore rule details
 
@@ -102,7 +106,7 @@ Direct QR-pool reads/writes are admin-only. Staff resolves a single assignment v
 
 - `ensureAuthenticated`: any valid Firebase identity.
 - `ensureAdmin`: custom token claim must be exactly `admin`.
-- `ensureStaffLike`: `admin`, `staff`, or `pos_staff` claim.
+- `ensureStaffLike`: `admin`, `staff`, `pos_staff`, or `head_pos` claim.
 - `ensureTopupLike`: `admin` or `topup_staff` claim.
 
 Functions do not consult account `status`; they rely on Auth token/disabled-user behavior. A token issued before disable may remain usable for Functions until revoked/expired unless Firebase automatically rejects it; the code does not explicitly revoke refresh tokens or check the Firestore account status.

@@ -12,6 +12,7 @@ import {
   KITCHEN_STATION_LABELS,
   splitOrderByStation,
 } from './kitchenStations'
+import { compareKitchenTickets } from './foodQueuePosition'
 
 // LocalStorage key for the filter selection — per event so a tablet that
 // switches between events doesn't carry over the burger filter into a future
@@ -363,13 +364,8 @@ export function KitchenQueuePanel({ eventId, actorUid, actorName }) {
   }, [allTickets])
 
   const sortedTickets = useMemo(() => {
-    // Stable order: by original order createdAt, then by station so split
-    // tickets from the same order stay adjacent.
-    return [...visibleTickets].sort((a, b) => {
-      const dt = getMillis(a.order.createdAt) - getMillis(b.order.createdAt)
-      if (dt !== 0) return dt
-      return a.index - b.index
-    })
+    // Stable order: by original order createdAt, order ID, then station.
+    return [...visibleTickets].sort(compareKitchenTickets)
   }, [visibleTickets])
 
   const ticketsByStatus = useMemo(() => {

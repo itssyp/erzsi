@@ -14,7 +14,7 @@ The repository contains the complete web client, callable backend, database rule
 
 ### Participant (`user`)
 
-Registers with name, Shibboleth, e-mail, and password. After joining the active event, sees profile and balance, receives/displays a personal QR code, reviews order history, and follows the latest undelivered food order. A linked participant can self-claim an unused QR.
+Registers with name, Shibboleth, e-mail, and password. Can browse a read-only, category-filtered menu for the active event before linking a participant profile. After joining the event, sees profile and balance, receives/displays a personal QR code, reviews order history, and follows the latest undelivered food order. A linked participant can self-claim an unused QR.
 
 ### POS worker (`pos_staff`)
 
@@ -23,6 +23,10 @@ Searches or scans a participant, holds an exclusive basket lease, scans products
 ### Staff (`staff`)
 
 Has POS/kitchen capabilities plus people, product, modifier-template, and stock administration. Does not receive admin-only account, event, QR-pool, global analytics, or audit screens.
+
+### Head counter worker (`head_pos`, Főbüfé)
+
+Can use the POS, manage the catalog and stock, and view event statistics on a separate page. Cannot access the top-up, kitchen, people-management, or admin pages.
 
 ### Top-up worker (`topup_staff`)
 

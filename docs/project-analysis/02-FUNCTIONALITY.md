@@ -110,7 +110,9 @@ Admin selects people explicitly or by team/type and supplies one nonzero delta a
 
 ## Catalog and modifiers
 
-Staff/admin manage products and modifier templates. A product contains name, normalized name, category, nonnegative integer price, active and temporary-unavailable flags, optional DRS flag, optional modifier-template link, barcodes, and a stock recipe.
+Participants have a separate read-only `/menu` page for the active event. It shows active products grouped by category with category filters, search, prices including the DRS deposit when applicable, and temporary or kitchen-closed availability labels. It does not require a linked participant profile.
+
+Staff, Főbüfé, and admins manage products and modifier templates. A product contains name, normalized name, category, nonnegative integer price, active and temporary-unavailable flags, optional DRS flag, optional modifier-template link, barcodes, and a stock recipe.
 
 Barcodes are numeric, unique by index document, and may not be four digits. Saving a product transactionally updates the product, removes obsolete barcode indexes, creates current indexes, and audits. Imports validate the file in the browser and write chunks of 200. Clear/delete hard-delete products and barcode indexes but preserve historical order snapshots.
 
@@ -164,6 +166,10 @@ Explicit cancel deletes the basket if the caller owns it or it is stale. UI atte
 
 The kitchen subscribes to all food orders, splits an order into station tickets, filters by persisted station preferences, and displays new/preparing/ready columns. Audio cues play for arrivals unless muted. Staff update one station in a transaction; the service supports legacy orders without station maps by synthesizing the map first. The event-level kitchen-closed flag controls service availability.
 
+The participant dashboard shows every active food order with a live queue count per station (burger, gyros, pizza, or other). Each station ticket counts as one order regardless of quantity. Preparing tickets precede new tickets, then creation time and order ID break ties; ready and delivered tickets have no waiting count. The dashboard and kitchen board share the tie-breaker so equal timestamps remain consistent.
+
+Participants can opt in to Firebase Cloud Messaging web-push alerts per device. The `notifyFoodOrderReady` Firestore trigger sends one pickup alert when the whole order first becomes ready, including mixed-station orders. Tokens live under the participant account and are removed on opt-out or sign-out. Push requires a project-specific public VAPID key and deployed Hosting, Functions, and Rules; see `docs/FIREBASE-ENVIRONMENTS.md`.
+
 Transitions are not strictly enforced: the UI presents forward movement, but the service only validates that the requested status is one of the four allowed values. A caller with Firestore rights can jump or reverse states.
 
 **Implementation.** `src/features/kitchen/`, `updateFoodOrderStatus` in `orderService.js`.
@@ -176,7 +182,7 @@ DRS bottle returns can be recorded either as basket lines or through `createDrsR
 
 ## Reporting and audit
 
-Admin analytics subscribes to raw orders, ledger entries, people, and products for a selected active or closed event, then computes revenue, item/category/product composition, customers/teams/types, staff activity, refunds, hourly/daily series, DRS, and cup metrics in-browser. CSV exports are generated with Blob downloads.
+The separate `/statistics` page is available to admins and Főbüfé (`head_pos`). It subscribes to raw orders, ledger entries, people, and products for a selected active or closed event, then computes revenue, item/category/product composition, customers/teams/types, staff activity, refunds, hourly/daily series, DRS, and cup metrics in-browser. CSV exports are generated with Blob downloads.
 
 Audit logs are event-local and include actor, target, person, details, and server timestamp. The admin audit UI enriches them with live person/account names and supports event/type/search filters. It is an operational audit aid, not tamper-proof: POS roles can write arbitrary audit documents under current Rules.
 

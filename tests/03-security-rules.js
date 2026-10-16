@@ -17,7 +17,7 @@ import { fileURLToPath } from 'url'
 import { PROJECT_ID } from './config.js'
 import { assert, section, printStats, printSummary } from './helpers.js'
 import {
-  doc, getDoc, setDoc
+  deleteDoc, doc, getDoc, serverTimestamp, setDoc
 } from 'firebase/firestore'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -46,6 +46,7 @@ await testEnv.withSecurityRulesDisabled(async (ctx) => {
     setDoc(doc(db, 'system/runtime'), { activeEventId: TEST_EVENT_ID }),
     setDoc(doc(db, 'accounts/admin-uid'), { uid: 'admin-uid', role: 'admin', status: 'active' }),
     setDoc(doc(db, 'accounts/staff-uid'), { uid: 'staff-uid', role: 'staff', status: 'active' }),
+    setDoc(doc(db, 'accounts/head-pos-uid'), { uid: 'head-pos-uid', role: 'head_pos', status: 'active' }),
     setDoc(doc(db, 'accounts/user-uid'), { uid: 'user-uid', role: 'user', status: 'active' }),
     setDoc(doc(db, 'accounts/disabled-uid'), { uid: 'disabled-uid', role: 'staff', status: 'disabled' }),
     setDoc(doc(db, `accounts/user-uid/eventLinks/${TEST_EVENT_ID}`), { eventId: TEST_EVENT_ID, personId: 'person-uid' }),
@@ -86,6 +87,7 @@ await testEnv.withSecurityRulesDisabled(async (ctx) => {
 // Cache Firestore instances once to avoid re-initialization errors
 const adminDb = testEnv.authenticatedContext('admin-uid', { role: 'admin' }).firestore()
 const staffDb = testEnv.authenticatedContext('staff-uid', { role: 'staff' }).firestore()
+const headPosDb = testEnv.authenticatedContext('head-pos-uid', { role: 'head_pos' }).firestore()
 const userDb = testEnv.authenticatedContext('user-uid', { role: 'user' }).firestore()
 const disabledDb = testEnv.authenticatedContext('disabled-uid', { role: 'staff' }).firestore()
 const unauthedDb = testEnv.unauthenticatedContext().firestore()
@@ -105,6 +107,8 @@ await assertSucceeds(setDoc(doc(adminDb, 'system/runtime'), { activeEventId: TES
 assert(true, 'Admin can write system/runtime')
 await assertFails(setDoc(doc(staffDb, 'system/runtime'), { activeEventId: null }))
 assert(true, 'Staff cannot write system/runtime')
+await assertFails(setDoc(doc(headPosDb, 'system/runtime'), { activeEventId: null }))
+assert(true, 'Főbüfé cannot write system/runtime')
 
 // ── 2. accounts ──────────────────────────────────────────────────────────────
 section('Rules: accounts')
@@ -119,6 +123,28 @@ await assertFails(getDoc(doc(userDb, 'accounts/admin-uid')))
 assert(true, 'User cannot read other accounts')
 await assertFails(setDoc(doc(staffDb, 'accounts/staff-uid'), { role: 'admin', status: 'active' }))
 assert(true, 'Staff cannot modify accounts')
+
+section('Rules: push tokens')
+const ownPushToken = doc(userDb, 'accounts/user-uid/pushTokens/device-1')
+await assertSucceeds(setDoc(ownPushToken, { token: 'test-fcm-token', origin: 'https://kasszaserzsi.hu', updatedAt: serverTimestamp() }))
+assert(true, 'Participant can register a push token on their own account')
+await assertSucceeds(getDoc(ownPushToken))
+assert(true, 'Participant can read their own push token')
+await assertFails(getDoc(doc(staffDb, 'accounts/user-uid/pushTokens/device-1')))
+assert(true, 'Staff cannot read participant push tokens')
+await assertFails(setDoc(doc(userDb, 'accounts/admin-uid/pushTokens/device-1'), { token: 'stolen', origin: 'https://kasszaserzsi.hu', updatedAt: serverTimestamp() }))
+assert(true, 'Participant cannot register a token on another account')
+await assertFails(setDoc(ownPushToken, { token: 'test-fcm-token', origin: 'https://kasszaserzsi.hu', role: 'admin', updatedAt: serverTimestamp() }))
+assert(true, 'Push token documents reject unexpected fields')
+await assertSucceeds(deleteDoc(ownPushToken))
+assert(true, 'Participant can turn off push on their device')
+
+// ── Participant catalog menu ────────────────────────────────────────────────
+section('Rules: participant catalog menu')
+await assertSucceeds(getDoc(doc(userDb, `events/${TEST_EVENT_ID}/products/beer-001`)))
+assert(true, 'Participant can read catalog products')
+await assertFails(setDoc(doc(userDb, `events/${TEST_EVENT_ID}/products/beer-001`), { price: 1 }, { merge: true }))
+assert(true, 'Participant cannot edit catalog products')
 
 // ── 3. people ────────────────────────────────────────────────────────────────
 section('Rules: people')
@@ -169,6 +195,8 @@ await assertSucceeds(getDoc(doc(adminDb, `events/${TEST_EVENT_ID}/qrAssignments/
 assert(true, 'Admin can read QR assignments')
 await assertFails(getDoc(doc(staffDb, `events/${TEST_EVENT_ID}/qrAssignments/1234`)))
 assert(true, 'Staff CANNOT read QR assignments (admin-only in rules)')
+await assertFails(getDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/qrAssignments/1234`)))
+assert(true, 'Főbüfé cannot read QR assignments')
 await assertFails(getDoc(doc(userDb, `events/${TEST_EVENT_ID}/qrAssignments/1234`)))
 assert(true, 'User cannot read QR assignments')
 
@@ -179,6 +207,25 @@ await assertSucceeds(getDoc(doc(adminDb, `events/${TEST_EVENT_ID}/auditLogs/audi
 assert(true, 'Admin can read audit logs')
 await assertFails(getDoc(doc(staffDb, `events/${TEST_EVENT_ID}/auditLogs/audit-001`)))
 assert(true, 'Staff cannot read audit logs')
+
+// Főbüfé can sell, edit the catalog, and read statistics inputs without admin access.
+section('Rules: Főbüfé access')
+await assertSucceeds(getDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/people/person-uid`)))
+assert(true, 'Főbüfé can read people for POS and statistics')
+await assertSucceeds(getDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/orders/order-001`)))
+assert(true, 'Főbüfé can read orders for statistics')
+await assertSucceeds(getDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/ledgerEntries/entry-001`)))
+assert(true, 'Főbüfé can read ledger entries for statistics')
+await assertSucceeds(getDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/baskets/person-uid`)))
+assert(true, 'Főbüfé can read POS baskets')
+await assertSucceeds(setDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/products/beer-001`), { price: 600 }, { merge: true }))
+assert(true, 'Főbüfé can update catalog products')
+await assertFails(setDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/people/person-uid`), { displayName: 'Changed' }, { merge: true }))
+assert(true, 'Főbüfé cannot manage people')
+await assertFails(setDoc(doc(headPosDb, `events/${TEST_EVENT_ID}`), { isKitchenClosed: true, updatedBy: 'head-pos-uid', updatedAt: new Date() }, { merge: true }))
+assert(true, 'Főbüfé cannot toggle kitchen status')
+await assertFails(getDoc(doc(headPosDb, `events/${TEST_EVENT_ID}/auditLogs/audit-001`)))
+assert(true, 'Főbüfé cannot read admin audit logs')
 
 // ── 8. disabled account ──────────────────────────────────────────────────────
 section('Rules: disabled account')

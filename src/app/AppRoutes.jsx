@@ -11,9 +11,11 @@ import { ALL_ROLES, ROLES } from '../lib/roles'
 import { LoginPage } from '../features/auth/LoginPage'
 import { AdminDashboardPage } from '../features/dashboard/AdminDashboardPage'
 import { CatalogManagementPage } from '../features/dashboard/CatalogManagementPage'
+import { CustomerMenuPage } from '../features/dashboard/CustomerMenuPage'
 import { NotFoundPage } from '../features/dashboard/NotFoundPage'
 import { QrLandingPage } from '../features/dashboard/QrLandingPage'
 import { StaffDashboardPage } from '../features/dashboard/StaffDashboardPage'
+import { StatisticsPage } from '../features/dashboard/StatisticsPage'
 import { TopupPage } from '../features/dashboard/TopupPage'
 import { UserDashboardPage } from '../features/dashboard/UserDashboardPage'
 
@@ -50,9 +52,19 @@ export function AppRoutes() {
             }
           />
           <Route
+            path="menu"
+            element={
+              <RequireRole allowedRoles={[ROLES.user]}>
+                <RequireActiveEvent>
+                  <CustomerMenuPage />
+                </RequireActiveEvent>
+              </RequireRole>
+            }
+          />
+          <Route
             path="staff"
             element={
-              <RequireRole allowedRoles={[ROLES.staff, ROLES.posStaff, ROLES.admin]}>
+              <RequireRole allowedRoles={[ROLES.staff, ROLES.posStaff, ROLES.headPos, ROLES.admin]}>
                 <RequireActiveEvent>
                   <StaffDashboardPage mode="sell" />
                 </RequireActiveEvent>
@@ -72,10 +84,18 @@ export function AppRoutes() {
           <Route
             path="catalog"
             element={
-              <RequireRole allowedRoles={[ROLES.staff, ROLES.admin]}>
+              <RequireRole allowedRoles={[ROLES.staff, ROLES.headPos, ROLES.admin]}>
                 <RequireActiveEvent>
                   <CatalogManagementPage />
                 </RequireActiveEvent>
+              </RequireRole>
+            }
+          />
+          <Route
+            path="statistics"
+            element={
+              <RequireRole allowedRoles={[ROLES.headPos, ROLES.admin]}>
+                <StatisticsPage />
               </RequireRole>
             }
           />

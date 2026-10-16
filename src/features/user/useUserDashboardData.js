@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
 import { subscribeFoodOrders, subscribeOrdersForPerson } from '../orders/orderService'
+import { splitOrderByStation } from '../kitchen/kitchenStations'
+import { countStationTicketsAhead } from '../kitchen/foodQueuePosition'
 import { subscribeToActiveEventLink, subscribeToLinkedPerson } from './userService'
 
 const initialState = {
@@ -9,41 +11,8 @@ const initialState = {
   person: null,
   orders: [],
   foodQueueOrders: [],
+  foodQueueLoaded: false,
   error: null,
-}
-
-const FOOD_QUEUE_STATUS_RANK = {
-  [FOOD_ORDER_STATUSES.preparing]: 0,
-  [FOOD_ORDER_STATUSES.new]: 1,
-  [FOOD_ORDER_STATUSES.ready]: 2,
-  [FOOD_ORDER_STATUSES.delivered]: 3,
-}
-
-function getOrderTimeMs(order) {
-  return order?.createdAt?.toMillis?.() || 0
-}
-
-function countOrdersAhead(activeOrder, foodQueueOrders) {
-  if (!activeOrder || activeOrder.foodStatus === FOOD_ORDER_STATUSES.ready) {
-    return 0
-  }
-
-  const activeStatus = activeOrder.foodStatus || FOOD_ORDER_STATUSES.new
-  const activeRank = FOOD_QUEUE_STATUS_RANK[activeStatus] ?? FOOD_QUEUE_STATUS_RANK[FOOD_ORDER_STATUSES.new]
-  const activeTime = getOrderTimeMs(activeOrder)
-
-  return (foodQueueOrders || []).filter((order) => {
-    if (order.id === activeOrder.id) return false
-
-    const status = order.foodStatus || FOOD_ORDER_STATUSES.new
-    if (status === FOOD_ORDER_STATUSES.ready || status === FOOD_ORDER_STATUSES.delivered) return false
-
-    const rank = FOOD_QUEUE_STATUS_RANK[status] ?? FOOD_QUEUE_STATUS_RANK[FOOD_ORDER_STATUSES.new]
-    if (rank < activeRank) return true
-    if (rank > activeRank) return false
-
-    return getOrderTimeMs(order) < activeTime
-  }).length
 }
 
 export function useUserDashboardData({ uid, eventId }) {
@@ -76,6 +45,7 @@ export function useUserDashboardData({ uid, eventId }) {
               person: null,
               orders: [],
               foodQueueOrders: [],
+              foodQueueLoaded: false,
               error: null,
             })
           }
@@ -87,6 +57,10 @@ export function useUserDashboardData({ uid, eventId }) {
             ...current,
             loading: true,
             link,
+            person: null,
+            orders: [],
+            foodQueueOrders: [],
+            foodQueueLoaded: false,
             error: null,
           }))
         }
@@ -114,6 +88,7 @@ export function useUserDashboardData({ uid, eventId }) {
               person: null,
               orders: [],
               foodQueueOrders: [],
+              foodQueueLoaded: false,
               error,
             })
           },
@@ -149,6 +124,7 @@ export function useUserDashboardData({ uid, eventId }) {
             setState((current) => ({
               ...current,
               foodQueueOrders,
+              foodQueueLoaded: true,
               error: null,
             }))
           },
@@ -171,6 +147,7 @@ export function useUserDashboardData({ uid, eventId }) {
           person: null,
           orders: [],
           foodQueueOrders: [],
+          foodQueueLoaded: false,
           error,
         })
       },
@@ -185,24 +162,30 @@ export function useUserDashboardData({ uid, eventId }) {
     }
   }, [uid, eventId])
 
-  const activeFoodOrder = useMemo(() => {
-    return state.orders.find(
+  const activeFoodOrders = useMemo(() => {
+    return state.orders.filter(
       (order) =>
         order.hasFood &&
         order.foodStatus &&
         order.foodStatus !== FOOD_ORDER_STATUSES.delivered,
-    ) || null
+    )
   }, [state.orders])
 
-  const activeFoodOrdersAhead = useMemo(
-    () => countOrdersAhead(activeFoodOrder, state.foodQueueOrders),
-    [activeFoodOrder, state.foodQueueOrders],
-  )
+  const activeFoodOrdersWithQueues = useMemo(() => {
+    const allTickets = state.foodQueueOrders.flatMap(splitOrderByStation)
+    return activeFoodOrders.map((order) => ({
+      order,
+      stations: splitOrderByStation(order).map((ticket) => ({
+        station: ticket.station,
+        status: ticket.status,
+        ordersAhead: state.foodQueueLoaded ? countStationTicketsAhead(ticket, allTickets) : null,
+      })),
+    }))
+  }, [activeFoodOrders, state.foodQueueOrders, state.foodQueueLoaded])
 
   return {
     ...state,
-    activeFoodOrder,
-    activeFoodOrdersAhead,
+    activeFoodOrdersWithQueues,
     hasLinkedPerson: Boolean(state.link?.personId && state.person),
   }
 }

@@ -14,9 +14,10 @@ Read this page for the 10–20 minute mental model, then [01-PROJECT-OVERVIEW.md
 
 | Actor | Role | Main intent |
 | --- | --- | --- |
-| Participant/guest | `user` | Join the current event, see balance and orders, follow food status, claim a QR code |
+| Participant/guest | `user` | Browse the read-only menu, join the current event, see balance and orders, follow food status, claim a QR code |
 | Temporary counter worker | `pos_staff` | Identify guests, sell/refund, operate the kitchen board |
 | Staff/organizer | `staff` | All counter work plus people and catalog/stock management |
+| Head counter worker (Főbüfé) | `head_pos` | Use POS, manage the catalog, and view event statistics |
 | Top-up worker | `topup_staff` | Find participants and add positive balance |
 | Administrator | `admin` | Full event, account, QR, balance, reporting, and audit administration |
 
@@ -83,7 +84,7 @@ An `Event` owns attendees (`Person`), products, QR credentials, baskets, orders,
 | Firebase JS SDK 12 | Auth, Firestore listeners/transactions, callable Functions |
 | Firebase Admin / Functions v2 | Auth administration and privileged transactional workflows |
 | Cloud Firestore | Document database, real-time transport, concurrency control |
-| Recharts | Admin analytics visualizations |
+| Recharts | Event statistics visualizations |
 | SheetJS (`xlsx`) | Browser-side Excel import/export |
 | `qr-scanner` / `qrcode` | Camera/keyboard scanning and QR rendering |
 
@@ -148,7 +149,7 @@ See [10-ARCHITECTURAL-ASSESSMENT.md](10-ARCHITECTURAL-ASSESSMENT.md) for evidenc
 14. DRS is 50 HUF per bottle; reusable-cup returns are 1,000 HUF and tracked as synthetic order lines.
 15. A configured event may permit exactly one purchase that crosses a non-negative balance below zero; another positive purchase is then blocked.
 16. Event close is the only operation that advances balances into the global carryover collection.
-17. Admin analytics recompute in the browser from live raw collections.
+17. The statistics page recomputes in the browser from live raw collections and is available to admins and Főbüfé.
 18. Production PWA caching is enabled; staging unregisters service workers.
 19. Existing source changes were present during this analysis; documentation describes the inspected working tree, not necessarily the last commit.
 20. For sensitive changes, review service code, Functions, and Rules together.

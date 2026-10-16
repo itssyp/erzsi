@@ -1,5 +1,7 @@
 # Erzsi 2.0
 
+For installation, Firebase environment configuration, and deployment instructions, see [Firebase Environments: Quick Setup and Deployment](docs/FIREBASE-ENVIRONMENTS.md).
+
 ## Local Development
 
 Run the app with:

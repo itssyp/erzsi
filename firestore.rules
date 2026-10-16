@@ -51,11 +51,16 @@ service cloud.firestore {
     }
 
     function isStaffLike() {
-      return (effectiveRole() == 'staff' || effectiveRole() == 'pos_staff' || effectiveRole() == 'admin')
+      return (effectiveRole() == 'staff' || effectiveRole() == 'pos_staff' || effectiveRole() == 'head_pos' || effectiveRole() == 'admin')
         && accountStatus() != 'disabled';
     }
 
     function canUsePos() {
+      return (effectiveRole() == 'admin' || effectiveRole() == 'staff' || effectiveRole() == 'pos_staff' || effectiveRole() == 'head_pos')
+        && accountStatus() != 'disabled';
+    }
+
+    function canUseKitchen() {
       return (effectiveRole() == 'admin' || effectiveRole() == 'staff' || effectiveRole() == 'pos_staff')
         && accountStatus() != 'disabled';
     }
@@ -66,7 +71,7 @@ service cloud.firestore {
     }
 
     function canManageCatalog() {
-      return (effectiveRole() == 'admin' || effectiveRole() == 'staff')
+      return (effectiveRole() == 'admin' || effectiveRole() == 'staff' || effectiveRole() == 'head_pos')
         && accountStatus() != 'disabled';
     }
 
@@ -149,6 +154,21 @@ service cloud.firestore {
         allow read: if isOwnAccount(uid) || isAdmin();
         allow write: if isAdmin();
       }
+
+      match /pushTokens/{deviceId} {
+        allow read, delete: if isOwnAccount(uid);
+        allow create, update: if isOwnAccount(uid)
+          && accountRole() == 'user'
+          && accountStatus() == 'active'
+          && request.resource.data.keys().hasOnly(['token', 'origin', 'updatedAt'])
+          && request.resource.data.keys().hasAll(['token', 'origin', 'updatedAt'])
+          && request.resource.data.token is string
+          && request.resource.data.token.size() > 0
+          && request.resource.data.token.size() <= 4096
+          && request.resource.data.origin is string
+          && request.resource.data.origin.size() <= 150
+          && request.resource.data.updatedAt == request.time;
+      }
     }
 
     match /system/runtime {
@@ -164,7 +184,7 @@ service cloud.firestore {
     match /events/{eventId} {
       allow read: if isSignedIn();
       allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (canUsePos() && validKitchenEventUpdate());
+      allow update: if isAdmin() || (canUseKitchen() && validKitchenEventUpdate());
 
       match /products/{productId} {
         allow read: if isSignedIn();

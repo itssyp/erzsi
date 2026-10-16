@@ -6,7 +6,9 @@ import App from './App.jsx'
 
 if (import.meta.env.VITE_APP_ENV === 'staging' && 'serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations()
-    .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+    .then((registrations) => Promise.all(registrations
+      .filter((registration) => !registration.scope.endsWith('/firebase-cloud-messaging-push-scope/'))
+      .map((registration) => registration.unregister())))
     .catch(() => {})
 }
 

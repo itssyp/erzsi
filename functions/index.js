@@ -1,9 +1,12 @@
 import { randomInt } from 'node:crypto'
+import process from 'node:process'
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { FieldValue, getFirestore } from 'firebase-admin/firestore'
+import { getMessaging } from 'firebase-admin/messaging'
 import { setGlobalOptions } from 'firebase-functions/v2'
 import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { onDocumentUpdated } from 'firebase-functions/v2/firestore'
 import { defineString } from 'firebase-functions/params'
 
 initializeApp()
@@ -22,6 +25,7 @@ setGlobalOptions({ region: 'europe-west1', maxInstances: 10, cors: callableCorsO
 
 const adminAuth = getAuth()
 const db = getFirestore()
+const messaging = getMessaging()
 const bootstrapAdminEmails = defineString('BOOTSTRAP_ADMIN_EMAILS')
 const callableOptions = { cors: callableCorsOrigins }
 
@@ -71,6 +75,7 @@ const ROLES = {
   admin: 'admin',
   staff: 'staff',
   posStaff: 'pos_staff',
+  headPos: 'head_pos',
   topupStaff: 'topup_staff',
   user: 'user',
 }
@@ -110,7 +115,7 @@ function ensureStaffLike(request) {
   const authContext = ensureAuthenticated(request)
   const role = authContext.token.role
 
-  if (role !== ROLES.admin && role !== ROLES.staff && role !== ROLES.posStaff) {
+  if (role !== ROLES.admin && role !== ROLES.staff && role !== ROLES.posStaff && role !== ROLES.headPos) {
     throw new HttpsError('permission-denied', 'Staff or admin privileges are required.')
   }
 
@@ -1815,4 +1820,100 @@ export const selfAssignQrCredential = onCall(callableOptions, async (request) =>
   })
 
   return { personId, qrCode }
+})
+
+// A mixed-station order is ready only after every station is ready or delivered.
+export const notifyFoodOrderReady = onDocumentUpdated({
+  document: 'events/{eventId}/orders/{orderId}',
+  retry: true,
+}, async (event) => {
+  const before = event.data?.before.data()
+  const after = event.data?.after.data()
+  if (!after?.hasFood || after.foodStatus !== 'ready' || before?.foodStatus === 'ready' || !after.personId) return
+
+  const { eventId, orderId } = event.params
+  const person = (await getPersonRef(eventId, after.personId).get()).data()
+  const uid = person?.linkedAuthUid || person?.linkedAccountId
+  if (!uid || person?.recordStatus === 'deleted') return
+
+  const [account, link, tokenSnapshot] = await Promise.all([
+    db.doc(`accounts/${uid}`).get(),
+    db.doc(`accounts/${uid}/eventLinks/${eventId}`).get(),
+    db.collection(`accounts/${uid}/pushTokens`).get(),
+  ])
+  if (account.data()?.role !== 'user' || account.data()?.status === 'disabled' || link.data()?.personId !== after.personId) return
+
+  const tokenDocs = tokenSnapshot.docs.filter((snapshot) => typeof snapshot.data().token === 'string' && snapshot.data().token)
+  if (!tokenDocs.length) return
+
+  // Firestore triggers can be delivered more than once. Claim this order first.
+  const deliveryRef = db.doc(`events/${eventId}/orderPushDeliveries/${orderId}`)
+  const claimed = await db.runTransaction(async (transaction) => {
+    const prior = await transaction.get(deliveryRef)
+    if (prior.data()?.status === 'sent') return false
+    const claimedAt = prior.data()?.claimedAt?.toMillis?.() || 0
+    if (prior.data()?.status === 'sending' && Date.now() - claimedAt < 2 * 60 * 1000) {
+      throw new Error('A push delivery is already in progress; retry later.')
+    }
+    transaction.set(deliveryRef, {
+      personId: after.personId,
+      uid,
+      claimedAt: FieldValue.serverTimestamp(),
+      status: 'sending',
+    }, { merge: true })
+    return true
+  })
+  if (!claimed) return
+
+  const projectId = process.env.GCLOUD_PROJECT || JSON.parse(process.env.FIREBASE_CONFIG || '{}').projectId
+  const allowedOrigins = new Set([
+    'https://kasszaserzsi.hu',
+    'https://www.kasszaserzsi.hu',
+    'https://staging.kasszaserzsi.hu',
+    `https://${projectId}.web.app`,
+    `https://${projectId}.firebaseapp.com`,
+  ])
+  const fallbackOrigin = projectId === 'erzsi-2-staging'
+    ? 'https://staging.kasszaserzsi.hu'
+    : 'https://kasszaserzsi.hu'
+  const title = 'Rendelésed elkészült'
+  const body = 'Átveheted az ételrendelésedet a pultnál.'
+
+  try {
+    let successCount = 0
+    let failureCount = 0
+    for (let start = 0; start < tokenDocs.length; start += 500) {
+      const group = tokenDocs.slice(start, start + 500)
+      const result = await messaging.sendEach(group.map((item) => {
+        const origin = allowedOrigins.has(item.data().origin) ? item.data().origin : fallbackOrigin
+        return {
+          token: item.data().token,
+          notification: { title, body },
+          data: { type: 'food-order-ready', orderId, eventId },
+          webpush: {
+            fcmOptions: { link: `${origin}/app` },
+            notification: {
+              title,
+              body,
+              icon: `${origin}/notification-burger.png`,
+              tag: `food-order-ready-${orderId}`,
+            },
+          },
+        }
+      }))
+      successCount += result.successCount
+      failureCount += result.failureCount
+      await Promise.all(result.responses.map((response, index) => {
+        if (response.error?.code === 'messaging/registration-token-not-registered'
+          || response.error?.code === 'messaging/invalid-registration-token') {
+          return group[index].ref.delete()
+        }
+        return Promise.resolve()
+      }))
+    }
+    await deliveryRef.update({ status: 'sent', successCount, failureCount, completedAt: FieldValue.serverTimestamp() })
+  } catch (error) {
+    await deliveryRef.update({ status: 'failed', error: String(error.message || error), completedAt: FieldValue.serverTimestamp() })
+    throw error
+  }
 })

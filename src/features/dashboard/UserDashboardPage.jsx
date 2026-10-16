@@ -2,14 +2,17 @@ import { useCallback, useEffect, useState } from 'react'
 import { StatusCard } from '../../components/StatusCard'
 import { LoadingScreen } from '../../components/LoadingScreen'
 import { formatHuf } from '../../lib/money'
+import { ROLES } from '../../lib/roles'
 import { useAuth } from '../auth/useAuth'
 import { useActiveEvent } from '../events/useActiveEvent'
 import { QrCodeCard } from '../user/QrCodeCard'
+import { FoodPushPreferences } from '../user/FoodPushPreferences'
 import { useUserDashboardData } from '../user/useUserDashboardData'
 import { joinEventByShibboleth } from '../user/userService'
 import { TabShell } from '../../components/TabShell'
 import { FOOD_ORDER_STATUSES } from '../orders/orderModels'
 import { isFoodCategory } from '../products/productModels'
+import { KITCHEN_STATION_LABELS } from '../kitchen/kitchenStations'
 import { getAttendeeTypeLabel, getPersonDisplayId } from '../people/personModels'
 import { QrSelfAssignOverlay } from '../qr/QrSelfAssignOverlay'
 
@@ -79,7 +82,7 @@ function getJoinErrorMessage(error) {
 }
 
 export function UserDashboardPage() {
-  const { account, user } = useAuth()
+  const { account, role, user } = useAuth()
   const { activeEvent, activeEventId } = useActiveEvent()
   const [joinShibboleth, setJoinShibboleth] = useState('')
   const [joinPending, setJoinPending] = useState(false)
@@ -88,7 +91,7 @@ export function UserDashboardPage() {
   const [showQrAssign, setShowQrAssign] = useState(false)
 
   const handleQrAssignClose = useCallback(() => setShowQrAssign(false), [])
-  const { loading, person, orders, activeFoodOrder, activeFoodOrdersAhead, hasLinkedPerson, error } = useUserDashboardData({
+  const { loading, person, orders, activeFoodOrdersWithQueues, hasLinkedPerson, error } = useUserDashboardData({
     uid: user?.uid,
     eventId: activeEventId,
   })
@@ -187,27 +190,41 @@ export function UserDashboardPage() {
       component: (
         <section className="panel user-flat-section user-active-order-section">
           <h3 className="card-title">Aktív ételrendelés</h3>
-          {activeFoodOrder ? (
-            <div className="user-active-order-content">
-              <FoodOrderTracker status={activeFoodOrder.foodStatus || FOOD_ORDER_STATUSES.new} />
-              <div className="user-order-queue-card">
-                <span>Előtted lévő rendelések</span>
-                <strong>{activeFoodOrdersAhead}</strong>
-              </div>
-              <p className="helper-text" style={{ marginTop: '16px', marginBottom: '12px' }}>
-                Rendelés ideje: {formatOrderTimestamp(activeFoodOrder.createdAt)}
-              </p>
-              <ul className="detail-list">
-                {activeFoodOrder.lines
-                  .filter((line) => isFoodCategory(line.category))
-                  .map((line) => (
-                    <li key={line.lineId}>
-                      <strong>{line.quantity} x {line.productName}</strong>
-                      <span>{formatHuf(line.lineTotal)}</span>
-                    </li>
+          {role === ROLES.user ? <FoodPushPreferences uid={user.uid} /> : null}
+          {activeFoodOrdersWithQueues.length ? (
+            activeFoodOrdersWithQueues.map(({ order, stations }) => (
+              <div className="user-active-order-content" key={order.id}>
+                <FoodOrderTracker status={order.foodStatus || FOOD_ORDER_STATUSES.new} />
+                <div className="user-order-station-list" aria-label="Konyhai sorok állapota">
+                  {stations.map(({ station, status, ordersAhead }) => (
+                    <div className="user-order-queue-card" key={station}>
+                      <span className="user-order-station-name">{KITCHEN_STATION_LABELS[station]}</span>
+                      {status === FOOD_ORDER_STATUSES.ready || status === FOOD_ORDER_STATUSES.delivered ? (
+                        <strong className="user-order-station-done">{STATUS_LABELS[status]}</strong>
+                      ) : (
+                        <>
+                          <span className="user-order-station-status">{STATUS_LABELS[status] || STATUS_LABELS[FOOD_ORDER_STATUSES.new]}</span>
+                          <span className="user-order-station-count">Előtted <strong>{ordersAhead ?? '…'}</strong></span>
+                        </>
+                      )}
+                    </div>
                   ))}
-              </ul>
-            </div>
+                </div>
+                <p className="helper-text" style={{ marginTop: '16px', marginBottom: '12px' }}>
+                  Rendelés ideje: {formatOrderTimestamp(order.createdAt)}
+                </p>
+                <ul className="detail-list">
+                  {order.lines
+                    .filter((line) => isFoodCategory(line.category))
+                    .map((line) => (
+                      <li key={line.lineId}>
+                        <strong>{line.quantity} x {line.productName}</strong>
+                        <span>{formatHuf(line.lineTotal)}</span>
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            ))
           ) : (
             <p className="helper-text user-active-order-empty">Jelenleg nincs aktív ételrendelés.</p>
           )}

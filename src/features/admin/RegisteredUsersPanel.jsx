@@ -10,6 +10,7 @@ const roleOptions = [
   { value: ROLES.posStaff, label: 'Beugrós' },
   { value: ROLES.topupStaff, label: 'Paku' },
   { value: ROLES.staff, label: 'Büfés' },
+  { value: ROLES.headPos, label: 'Főbüfé' },
   { value: ROLES.admin, label: 'Admin' },
 ]
 

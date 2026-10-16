@@ -14,6 +14,7 @@ const initialFormState = {
 const privilegedRoleOptions = [
   { value: ROLES.admin, label: 'Admin' },
   { value: ROLES.staff, label: 'Staff' },
+  { value: ROLES.headPos, label: 'Főbüfé' },
   { value: ROLES.topupStaff, label: 'Paku' },
   { value: ROLES.posStaff, label: 'POS' },
 ]

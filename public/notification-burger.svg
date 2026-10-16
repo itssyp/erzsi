@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Kasszás Erzsi hamburger">
+  <defs>
+    <linearGradient id="top-bun" x2="0" y2="1"><stop stop-color="#f6c46a"/><stop offset="1" stop-color="#d9902f"/></linearGradient>
+    <linearGradient id="bottom-bun" x2="0" y2="1"><stop stop-color="#e7a53d"/><stop offset="1" stop-color="#c97824"/></linearGradient>
+    <linearGradient id="tomato" x2="0" y2="1"><stop stop-color="#f87171"/><stop offset="1" stop-color="#dc2626"/></linearGradient>
+    <linearGradient id="cheese" x2="0" y2="1"><stop stop-color="#fde047"/><stop offset="1" stop-color="#f59e0b"/></linearGradient>
+    <linearGradient id="patty" x2="0" y2="1"><stop stop-color="#7c2d12"/><stop offset="1" stop-color="#4a1d0b"/></linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="140%" height="170%"><feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#451a03" flood-opacity=".18"/></filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M31 183 Q31 180 36 180 H220 Q225 180 225 183 V191 Q221 217 190 220 H66 Q35 217 31 191Z" fill="url(#bottom-bun)" stroke="#b7791f" stroke-width="2"/>
+    <rect x="20" y="158" width="216" height="28" rx="14" fill="url(#patty)"/>
+    <path d="M20 142 H236 V160 H191 L179 173 L166 160 H20Z" fill="url(#cheese)"/>
+    <path d="M20 127 Q31 115 43 126 Q55 137 67 125 Q79 115 91 127 Q103 138 115 126 Q127 114 139 127 Q151 138 163 125 Q175 115 187 127 Q199 138 211 125 Q224 114 236 127 V145 Q225 151 213 144 Q201 137 189 145 Q177 152 165 144 Q153 137 141 145 Q129 152 117 144 Q105 137 93 145 Q81 152 69 144 Q57 137 45 145 Q33 152 20 145Z" fill="#4ade80"/>
+    <path d="M24 126 Q48 119 72 127 Q96 136 120 127 Q144 119 168 127 Q192 136 232 125" fill="none" stroke="#22c55e" stroke-width="5" stroke-linecap="round"/>
+    <rect x="38" y="105" width="180" height="23" rx="12" fill="url(#tomato)"/>
+    <ellipse cx="79" cy="116" rx="5" ry="3" fill="#fee2e2" opacity=".9"/>
+    <ellipse cx="128" cy="116" rx="5" ry="3" fill="#fee2e2" opacity=".9"/>
+    <ellipse cx="177" cy="116" rx="5" ry="3" fill="#fee2e2" opacity=".9"/>
+    <path d="M29 98 Q31 40 89 37 Q128 29 167 37 Q225 40 227 98 Q227 106 219 106 H37 Q29 106 29 98Z" fill="url(#top-bun)" stroke="#b7791f" stroke-width="2"/>
+    <path d="M40 88 Q47 49 91 46 Q128 39 165 46 Q209 49 216 88" fill="none" stroke="#ffe2a4" stroke-opacity=".48" stroke-width="6" stroke-linecap="round"/>
+    <g fill="#fff7ed">
+      <ellipse cx="78" cy="70" rx="6" ry="3" transform="rotate(-19 78 70)"/>
+      <ellipse cx="109" cy="53" rx="6" ry="3" transform="rotate(20 109 53)"/>
+      <ellipse cx="143" cy="68" rx="6" ry="3" transform="rotate(-14 143 68)"/>
+      <ellipse cx="178" cy="55" rx="6" ry="3" transform="rotate(17 178 55)"/>
+    </g>
+  </g>
+</svg>

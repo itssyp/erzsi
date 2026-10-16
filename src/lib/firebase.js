@@ -13,6 +13,7 @@ const firebaseConfig = {
 }
 
 const app = initializeApp(firebaseConfig)
+export { app as firebaseApp, firebaseConfig }
 
 export const auth = getAuth(app)
 setPersistence(auth, browserLocalPersistence).catch(() => {})

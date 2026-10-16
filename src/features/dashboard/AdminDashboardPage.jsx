@@ -1,6 +1,5 @@
 import { AccountManagementPanel } from '../admin/AccountManagementPanel'
 import { AuditLogPanel } from '../admin/AuditLogPanel'
-import { EventAnalyticsPanel } from '../admin/EventAnalyticsPanel'
 import { EventManagementPanel } from '../admin/EventManagementPanel'
 import { PeopleManagementPanel } from '../admin/PeopleManagementPanel'
 import { RegisteredUsersPanel } from '../admin/RegisteredUsersPanel'
@@ -151,14 +150,6 @@ export function AdminDashboardPage() {
       ) : (
         <StatusCard title="Nincs aktív esemény" tone="warning" body="Először válassz vagy hozz létre egy eseményt." />
       ),
-    },
-    {
-      // Statisztika is the only event-aware tab that lets the admin pick any
-      // event (including closed ones), so it's safe to render without an
-      // active event — the panel's own picker handles it.
-      id: 'analytics',
-      label: 'Statisztika',
-      component: <EventAnalyticsPanel activeEventId={activeEventId} />,
     },
     {
       id: 'audit',

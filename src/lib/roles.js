@@ -2,6 +2,7 @@ export const ROLES = {
   user: 'user',
   staff: 'staff',
   posStaff: 'pos_staff',
+  headPos: 'head_pos',
   topupStaff: 'topup_staff',
   admin: 'admin',
 }
@@ -9,6 +10,7 @@ export const ROLES = {
 export const PRIVILEGED_ROLES = [
   ROLES.staff,
   ROLES.posStaff,
+  ROLES.headPos,
   ROLES.topupStaff,
   ROLES.admin,
 ]
@@ -16,6 +18,7 @@ export const PRIVILEGED_ROLES = [
 export const ALL_ROLES = [
   ROLES.user,
   ROLES.posStaff,
+  ROLES.headPos,
   ROLES.topupStaff,
   ROLES.staff,
   ROLES.admin,
@@ -28,6 +31,7 @@ export function getRoleFromClaims(claims) {
     claimedRole === ROLES.admin ||
     claimedRole === ROLES.staff ||
     claimedRole === ROLES.posStaff ||
+    claimedRole === ROLES.headPos ||
     claimedRole === ROLES.topupStaff ||
     claimedRole === ROLES.user
   ) {
@@ -38,11 +42,19 @@ export function getRoleFromClaims(claims) {
 }
 
 export function isStaffLike(role) {
+  return role === ROLES.staff || role === ROLES.posStaff || role === ROLES.headPos || role === ROLES.admin
+}
+
+export function canUseKitchen(role) {
   return role === ROLES.staff || role === ROLES.posStaff || role === ROLES.admin
 }
 
 export function canManageCatalog(role) {
-  return role === ROLES.staff || role === ROLES.admin
+  return role === ROLES.staff || role === ROLES.headPos || role === ROLES.admin
+}
+
+export function canViewStatistics(role) {
+  return role === ROLES.headPos || role === ROLES.admin
 }
 
 export function canUseTopup(role) {
@@ -51,7 +63,7 @@ export function canUseTopup(role) {
 
 export function getDefaultRouteForRole(role) {
   if (role === ROLES.admin) return '/admin'
-  if (role === ROLES.staff || role === ROLES.posStaff) return '/staff'
+  if (role === ROLES.staff || role === ROLES.posStaff || role === ROLES.headPos) return '/staff'
   if (role === ROLES.topupStaff) return '/topup'
   return '/app'
 }
