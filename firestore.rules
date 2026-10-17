@@ -61,7 +61,7 @@ service cloud.firestore {
     }
 
     function canUseKitchen() {
-      return (effectiveRole() == 'admin' || effectiveRole() == 'staff' || effectiveRole() == 'pos_staff')
+      return (effectiveRole() == 'admin' || effectiveRole() == 'staff' || effectiveRole() == 'pos_staff' || effectiveRole() == 'head_pos')
         && accountStatus() != 'disabled';
     }
 

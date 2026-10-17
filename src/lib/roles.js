@@ -46,7 +46,7 @@ export function isStaffLike(role) {
 }
 
 export function canUseKitchen(role) {
-  return role === ROLES.staff || role === ROLES.posStaff || role === ROLES.admin
+  return role === ROLES.staff || role === ROLES.posStaff || role === ROLES.headPos || role === ROLES.admin
 }
 
 export function canManageCatalog(role) {

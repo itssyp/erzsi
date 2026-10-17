@@ -74,7 +74,7 @@ export function AppRoutes() {
           <Route
             path="staff/kitchen"
             element={
-              <RequireRole allowedRoles={[ROLES.staff, ROLES.posStaff, ROLES.admin]}>
+              <RequireRole allowedRoles={[ROLES.staff, ROLES.posStaff, ROLES.headPos, ROLES.admin]}>
                 <RequireActiveEvent>
                   <StaffDashboardPage mode="kitchen" />
                 </RequireActiveEvent>
