@@ -23,7 +23,8 @@ export function TopupPage() {
       eventId={activeEventId}
       actorUid={user?.uid}
       view="topup"
-      allowManualAdjustment={role === ROLES.admin}
+      allowManualAdjustment={role === ROLES.admin || role === ROLES.topupStaff}
+      allowBulkAdjustment={role === ROLES.admin}
     />
   )
 }

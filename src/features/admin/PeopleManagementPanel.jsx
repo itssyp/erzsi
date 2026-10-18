@@ -1012,7 +1012,15 @@ function QrPoolTab({
 }
 
 // ── Main export ────────────────────────────────────────────────────────────
-export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', allowManualAdjustment = true }) {
+export function PeopleManagementPanel({
+  eventId,
+  actorUid,
+  view = 'personas',
+  allowManualAdjustment = true,
+  // Bulk adjust runs through the admin-only `bulkAdjustPersonBalance` Cloud
+  // Function, so it is gated separately from the single-persona correction.
+  allowBulkAdjustment = allowManualAdjustment,
+}) {
   const [people, setPeople] = useState([])
   const [accounts, setAccounts] = useState([])
   const [qrCredentials, setQrCredentials] = useState([])
@@ -2171,7 +2179,7 @@ export function PeopleManagementPanel({ eventId, actorUid, view = 'personas', al
                 <p className="helper-text">Keress névre, vagy olvass be QR-t. A QR automatikusan az egyenleg panelre vált.</p>
               </div>
               <div className="personas-list-actions">
-                {allowManualAdjustment ? (
+                {allowBulkAdjustment ? (
                   <button
                     type="button"
                     className={`secondary-button btn-sm${bulkSelectMode ? ' is-active' : ''}`}
